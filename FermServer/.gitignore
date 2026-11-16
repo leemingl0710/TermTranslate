@@ -1,0 +1,21 @@
+# Secrets
+.env
+*.env
+!.env.example
+
+# Maven
+target/
+
+# Eclipse
+.classpath
+.project
+.settings/
+bin/
+
+# IntelliJ / VS Code
+.idea/
+*.iml
+.vscode/
+
+# macOS
+.DS_Store
