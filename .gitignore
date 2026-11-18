@@ -21,3 +21,9 @@ bin/
 # macOS
 .DS_Store
 /.metadata/
+
+# Python (extractor)
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

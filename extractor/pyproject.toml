@@ -1,0 +1,29 @@
+[project]
+name = "extractor"
+version = "0.1.0"
+description = "PDF·PPT 텍스트 추출 (텍스트 레이어 + 이미지 OCR)"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "pymupdf>=1.24",
+    "rapidocr>=3.10,<4",  # 가벼운 OCR (torch 불필요). 모델 지정 방식이 버전마다 달라 고정
+    "onnxruntime>=1.18",
+    "numpy",
+    "pillow",
+    # 5.x는 macOS 14용 빌드 파일이 없어 소스 컴파일(수십 분)이 일어남 → 4.x 고정
+    "opencv-python-headless>=4.8,<5",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.uv]
+package = false
+# 팀원 PC(맥 M칩 / 윈도우)에서 미리 빌드된 파일만 쓰도록 확인
+required-environments = [
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
