@@ -22,6 +22,41 @@ uv add 패키지이름                                  # 패키지 추가 (uv.l
 > OCR 도구는 계획 문서의 EasyOCR 대신 **RapidOCR**(가볍고 torch 불필요)을 쓴다.
 > 테스트 파일로 정확도를 확인해 부족하면 `stage4_ocr.py`만 바꾸면 된다.
 
+## 자바(FermServer)에서 쓰기
+```java
+import Server.extract.*;
+
+ExtractorClient client = ExtractorClient.fromEnv();
+try {
+    List<Item> items = client.extract(Path.of("lecture.pdf"));
+    for (Item it : items) {
+        it.page();        // 페이지 번호
+        it.content();     // 문단 글자
+        it.origin();      // Item.Origin.TEXT / OCR
+    }
+} catch (ExtractionException e) {
+    e.getErrorType();     // 원인 (아래 표)
+    e.getMessage();       // 사용자에게 보여 줄 한국어 문장
+}
+```
+- 시간이 걸릴 수 있으니 Swing 화면 스레드에서 직접 부르지 말고 `SwingWorker` 등에서 부른다.
+- 설정은 `FermServer/.env` (생략 가능): `EXTRACTOR_DIR`(기본 `../extractor`), `UV_PATH`, `EXTRACTOR_TIMEOUT_SEC`(기본 300).
+  이클립스에서 `UV_NOT_FOUND`가 나면 `UV_PATH`에 uv 전체 경로를 적는다.
+- extractor에 필드가 늘어나도 자바 쪽은 깨지지 않는다 (모르는 필드는 무시).
+
+| errorType | 뜻 |
+|---|---|
+| `InputNotFoundError` | 파일이 없음 |
+| `UnsupportedFormatError` | 지원하지 않는 형식 (현재 PDF만) |
+| `CorruptedFileError` | 손상된 파일 |
+| `EncryptedFileError` | 암호가 걸린 파일 |
+| `UV_NOT_FOUND` | uv를 실행할 수 없음 (설치/`UV_PATH` 확인) |
+| `EXTRACTOR_NOT_FOUND` | extractor 폴더를 못 찾음 (`EXTRACTOR_DIR` 확인) |
+| `TIMEOUT` | 최대 시간 초과 |
+| `EXTRACTOR_FAILED` | 그 밖의 오류 (메시지에 상세 내용) |
+
+터미널에서 자바 빌드·테스트: `cd FermServer && ./mvnw test` (윈도우: `mvnw.cmd test`, Maven 설치 불필요)
+
 ## 구조 (단계별 모듈)
 | 파일 | 단계 |
 |---|---|
@@ -40,7 +75,7 @@ uv add 패키지이름                                  # 패키지 추가 (uv.l
 이후 단계는 JSON 형식을 바꾸지 않고 항목만 늘린다.
 
 1. [x] 텍스트 PDF에서 텍스트만 추출 (2단계)
-2. [ ] 자바 연결: FermServer에서 실행 → `List<Item>` (JSON 형식 확정)
+2. [x] 자바 연결: FermServer에서 실행 → `List<Item>` (JSON 형식 확정)
 3. [ ] 스캔 PDF 전체 OCR (4단계)
 4. [ ] 페이지 유형 판별 (1단계)
 5. [ ] 사진 OCR + 사전 중복 검사 (3·4단계)

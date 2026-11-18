@@ -12,6 +12,8 @@
     <properties>
         <maven.compiler.release>17</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- ./mvnw exec:java 기본 실행 클래스 (-Dexec.mainClass=... 로 바꿀 수 있음) -->
+        <exec.mainClass>Server.http.ApiServer</exec.mainClass>
     </properties>
 
     <dependencies>
@@ -29,6 +31,13 @@
             <version>3.0.2</version>
         </dependency>
 
+        <!-- Reads the extractor's JSON output into Java objects -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.18.2</version>
+        </dependency>
+
         <!-- JUnit 5 -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -44,6 +53,12 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
+            </plugin>
+            <!-- 터미널 실행용: ./mvnw -q compile exec:java  (기본: HTTP 서버) -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.5.0</version>
             </plugin>
         </plugins>
     </build>
