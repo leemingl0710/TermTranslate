@@ -27,3 +27,6 @@ bin/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Java 컴파일 결과
+*.class
