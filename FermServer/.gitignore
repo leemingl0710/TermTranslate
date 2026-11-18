@@ -19,3 +19,6 @@ bin/
 
 # macOS
 .DS_Store
+
+# 업로드된 파일
+uploads/
