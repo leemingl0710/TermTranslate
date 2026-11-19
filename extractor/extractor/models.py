@@ -25,7 +25,9 @@ class Item:
 
     def to_dict(self) -> dict:
         d = asdict(self)
-        d["bbox"] = [round(v, 2) for v in self.bbox]
+        d["bbox"] = [round(float(v), 2) for v in self.bbox]
+        if self.confidence is not None:
+            d["confidence"] = round(float(self.confidence), 3)
         if not d["flags"]:
             del d["flags"]
         return d
