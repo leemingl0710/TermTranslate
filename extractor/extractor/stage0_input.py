@@ -1,24 +1,76 @@
-"""0단계. 입력 형식 판별 → PDF 변환."""
+"""0단계. 입력 형식 판별 → PDF 변환.
+
+- 파일 앞부분(시그니처)으로 진짜 형식을 확인한다. 확장자만 믿지 않는다.
+- PPT/PPTX 는 LibreOffice 로 PDF 로 바꾼 뒤, 1~5단계를 PDF 와 똑같이 탄다.
+  (슬라이드 1장 = PDF 1페이지 → page 번호가 슬라이드 번호와 같다)
+"""
+import os
+import shutil
+import subprocess
+import tempfile
+import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from .errors import (ConversionError, CorruptedFileError, EncryptedFileError,
+                     InputNotFoundError, UnsupportedFormatError)
+
 PDF_MAGIC = b"%PDF"
 ZIP_MAGIC = b"PK\x03\x04"                      # pptx, docx
-OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # ppt, doc
+OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # ppt, doc, 암호 걸린 pptx
+# 암호 걸린 pptx 는 OLE 파일 안에 이 이름(UTF-16)의 항목이 들어 있다
+_ENCRYPTED_PACKAGE = "EncryptedPackage".encode("utf-16-le")
+
+SUPPORTED = ("pdf", "pptx", "ppt")
 
 
 def detect_format(path: Path) -> str:
-    """확장자로 1차 판별, 시그니처로 재확인. 'pdf' | 'pptx' | 'ppt' 반환.
+    """'pdf' | 'pptx' | 'ppt' 반환.
 
-    TODO: 지원하지 않거나 확장자와 시그니처가 다르면 UnsupportedFormatError.
+    - 시그니처가 지원 형식이면 그 형식 (확장자가 틀려도 내용을 믿는다)
+    - 확장자는 지원 형식인데 내용이 아니면 → 손상된 파일
+    - 둘 다 아니면 → 지원하지 않는 형식
     """
-    raise NotImplementedError
+    if not path.is_file():
+        raise InputNotFoundError(f"파일이 없습니다: {path}")
+    ext = path.suffix.lower().lstrip(".")
+    with path.open("rb") as f:
+        data = f.read(8)
+
+    if data.startswith(PDF_MAGIC):
+        return "pdf"
+    if data.startswith(ZIP_MAGIC):
+        try:
+            with zipfile.ZipFile(path) as z:
+                names = set(z.namelist())
+        except zipfile.BadZipFile as e:
+            if ext == "pptx":
+                raise CorruptedFileError(f"PPTX 파일이 손상되었습니다: {path.name}") from e
+            raise UnsupportedFormatError(f"지원하지 않는 형식입니다: {path.name}") from e
+        if "ppt/presentation.xml" in names:
+            return "pptx"
+        if ext == "pptx":
+            raise CorruptedFileError(f"PPTX 파일이 손상되었습니다: {path.name}")
+        raise UnsupportedFormatError(f"PDF·PPT 파일만 지원합니다: {path.name}")
+    if data.startswith(OLE_MAGIC):
+        if _ENCRYPTED_PACKAGE in path.read_bytes():
+            raise EncryptedFileError(f"암호가 걸린 파일입니다: {path.name}")
+        if ext == "ppt":
+            return "ppt"
+        if ext == "pptx":    # 옛날 형식을 확장자만 바꾼 경우
+            return "ppt"
+        raise UnsupportedFormatError(f"PDF·PPT 파일만 지원합니다: {path.name}")
+
+    if ext in SUPPORTED:
+        raise CorruptedFileError(f"{ext.upper()} 파일이 손상되었습니다: {path.name}")
+    raise UnsupportedFormatError(f"PDF·PPT 파일만 지원합니다: {path.name}")
 
 
 def find_soffice() -> str | None:
-    """LibreOffice 실행 파일 경로 (macOS 앱 번들 포함)."""
-    import shutil
+    """LibreOffice 실행 파일 경로. 환경변수 → PATH → 운영체제 기본 설치 위치 순."""
+    if (env := os.environ.get("LIBREOFFICE_PATH")) and Path(env).is_file():
+        return env
     for cand in ("soffice", "libreoffice"):
         if p := shutil.which(cand):
             return p
@@ -32,12 +84,50 @@ def find_soffice() -> str | None:
     return None
 
 
-@contextmanager
-def as_pdf(path: Path, timeout_sec: int) -> Iterator[Path]:
-    """PDF면 그대로, PPT/PPTX면 임시 폴더에 변환한 PDF를 넘기고 끝나면 삭제.
+INSTALL_HINT = ("LibreOffice 가 없어 PPT 를 변환할 수 없습니다. "
+                "설치: macOS `brew install --cask libreoffice`, "
+                "Windows `winget install TheDocumentFoundation.LibreOffice` "
+                "(다른 위치에 설치했다면 LIBREOFFICE_PATH 환경변수로 지정)")
 
-    TODO: soffice --headless --convert-to pdf --outdir <tmp> <file>, timeout 적용,
-          실패 시 ConversionError.
-    """
-    raise NotImplementedError
-    yield path
+
+def convert_to_pdf(src: Path, fmt: str, workdir: Path, timeout_sec: int) -> Path:
+    """src 를 workdir 안에서 PDF 로 바꾸고 그 경로를 돌려준다."""
+    soffice = find_soffice()
+    if soffice is None:
+        raise ConversionError(INSTALL_HINT)
+    # 한글·공백 파일 이름 문제를 피하려고 영어 이름으로 복사해서 변환
+    inp = workdir / f"input.{fmt}"
+    shutil.copyfile(src, inp)
+    # 변환마다 설정 폴더를 따로 써서, 동시에 여러 개 변환하거나 사용자가 LibreOffice 를
+    # 열어 둔 상태에서도 서로 부딪히지 않게 한다
+    profile = (workdir / "lo-profile").resolve().as_uri()
+    cmd = [soffice, "--headless", "--norestore", "--nolockcheck",
+           f"-env:UserInstallation={profile}",
+           "--convert-to", "pdf", "--outdir", str(workdir), str(inp)]
+    try:
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True,
+                              timeout=timeout_sec)
+    except subprocess.TimeoutExpired as e:
+        raise ConversionError(
+            f"PPT 변환이 {timeout_sec}초 안에 끝나지 않아 중단했습니다: {src.name}") from e
+    except OSError as e:
+        raise ConversionError(f"LibreOffice 를 실행할 수 없습니다 ({e})") from e
+
+    out = workdir / "input.pdf"
+    if proc.returncode != 0 or not out.is_file() or out.stat().st_size == 0:
+        detail = (proc.stderr or proc.stdout).decode("utf-8", "replace").strip().splitlines()
+        hint = f" ({detail[-1]})" if detail else ""
+        raise ConversionError(f"PPT 를 PDF 로 바꾸지 못했습니다: {src.name}{hint}")
+    return out
+
+
+@contextmanager
+def as_pdf(path: Path, timeout_sec: int) -> Iterator[tuple[Path, str]]:
+    """(PDF 경로, 원래 형식) 을 넘긴다. PDF 면 그대로, PPT/PPTX 면 임시 폴더에 변환하고
+    with 블록이 끝나면 임시 폴더를 지운다."""
+    fmt = detect_format(path)
+    if fmt == "pdf":
+        yield path, fmt
+        return
+    with tempfile.TemporaryDirectory(prefix="extractor-") as tmp:
+        yield convert_to_pdf(path, fmt, Path(tmp), timeout_sec), fmt

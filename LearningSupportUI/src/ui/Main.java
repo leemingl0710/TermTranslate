@@ -545,9 +545,9 @@ for (JButton button : buttons) {
         JFileChooser chooser = new JFileChooser();
         chooser.setMultiSelectionEnabled(true);
 
-        // 서버가 아직 PDF 만 처리할 수 있어 PDF 만 고르게 한다 (PPT 등은 추후 추가)
+        // 서버가 처리할 수 있는 PDF·PPT 만 고르게 한다
         FileNameExtensionFilter filter =
-            new FileNameExtensionFilter("PDF Files (*.pdf)", "pdf");
+            new FileNameExtensionFilter("PDF·PPT Files (*.pdf, *.pptx, *.ppt)", "pdf", "pptx", "ppt");
 
         chooser.setFileFilter(filter);
 

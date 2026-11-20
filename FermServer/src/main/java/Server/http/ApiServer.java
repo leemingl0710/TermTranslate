@@ -22,6 +22,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -33,7 +35,7 @@ import java.util.concurrent.Executors;
  *
  * <pre>
  * GET  /health                       서버 확인          → 200 {"status":"ok"}
- * POST /documents?filename=a.pdf     업로드·분석 (본문=파일) → 201 {"result_id":..,"document_id":..,"file_name":..,"item_count":..}
+ * POST /documents?filename=a.pdf     업로드·분석 (pdf, pptx, ppt) (본문=파일) → 201 {"result_id":..,"document_id":..,"file_name":..,"item_count":..}
  * GET  /results/{id}                 결과 조회          → 200 {...}
  * 실패: {"error": "종류", "message": "사용자에게 보여 줄 문장"}
  * </pre>
@@ -150,8 +152,8 @@ public final class ApiServer {
                 .map(String::strip)
                 .filter(s -> !s.isEmpty())
                 .orElseThrow(() -> new HttpError(400, "BAD_REQUEST", "filename 값이 필요합니다."));
-        if (!fileName.toLowerCase().endsWith(".pdf")) {
-            throw new HttpError(400, "UnsupportedFormatError", "아직 PDF만 지원합니다: " + fileName);
+        if (!isSupported(fileName)) {
+            throw new HttpError(400, "UnsupportedFormatError", "PDF·PPT 파일만 지원합니다: " + fileName);
         }
         String declared = ex.getRequestHeaders().getFirst("Content-Length");
         if (declared != null && Long.parseLong(declared) > maxUploadBytes) {
@@ -187,6 +189,14 @@ public final class ApiServer {
     }
 
     // ---------------- 도우미 ----------------
+
+    /** 받을 수 있는 확장자. 진짜 형식(파일 내용)은 extractor 가 다시 확인한다. */
+    private static final List<String> SUPPORTED_EXTENSIONS = List.of(".pdf", ".pptx", ".ppt");
+
+    static boolean isSupported(String fileName) {
+        String lower = fileName.toLowerCase(Locale.ROOT);
+        return SUPPORTED_EXTENSIONS.stream().anyMatch(lower::endsWith);
+    }
 
     private HttpError tooLarge() {
         return new HttpError(413, "FILE_TOO_LARGE",

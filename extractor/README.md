@@ -4,7 +4,10 @@ PDF/PPT에서 텍스트 레이어 문장 + 이미지 속 글자(OCR)를 뽑아 �
 설계: `PDF·PPT 텍스트 추출 구현 계획` 문서 참고.
 
 ## 설치 (팀원 누구나, 처음 한 번)
-1. **LibreOffice 설치** — https://www.libreoffice.org/download (PPT 변환용. PDF만 다룰 땐 없어도 됨)
+1. **LibreOffice 설치** (PPT 변환용. PDF만 다룰 땐 없어도 됨)
+   - macOS: `brew install --cask libreoffice`
+   - Windows: `winget install TheDocumentFoundation.LibreOffice`
+   - 다른 위치에 설치했다면 환경변수 `LIBREOFFICE_PATH` 에 `soffice` 실행 파일 경로를 넣는다.
 2. **설치 스크립트 실행**
    - macOS: `./setup.sh`
    - Windows: `setup.bat` 더블클릭
@@ -80,7 +83,7 @@ try {
 4. [x] 페이지 유형 판별 (1단계)
 5. [x] 사진 OCR + 사전 중복 검사 (3·4단계)
 6. [x] 결과 통합, 최종 중복 제거, 정렬 (5단계) + OCR 영어 글자 고치기 (I↔l, O↔0)
-7. [ ] 입력 형식 판별, PPT → PDF 변환 (0단계, LibreOffice 여부 결정)
+7. [x] 입력 형식 판별, PPT → PDF 변환 (0단계, LibreOffice)
 8. [ ] 품질 개선: 표, 2단 편집, 머리말 제거, 기준값 조정
 
 ## OCR 참고
@@ -90,6 +93,14 @@ try {
 - 고딕체의 I/l, O/0 은 모양으로 구별이 안 되어, 문서 본문 단어 + 자바 기본 이름 목록으로 고친다 (`ocr_fix.py`).
   본문에 없는 단어는 못 고친다 (예: 사진에만 나오는 클래스 이름).
 - 아직 안 되는 것: 코드 캡처의 줄 순서가 가끔 섞임, 2단 편집 읽는 순서 (8번 품질 개선에서).
+
+## PPT 참고
+- 형식은 확장자가 아니라 파일 앞부분(시그니처)으로 판별한다. 지원: `pdf`, `pptx`, `ppt`.
+- PPT/PPTX 는 LibreOffice 로 임시 폴더에 PDF 를 만든 뒤 PDF 와 똑같이 처리한다.
+  결과의 `page` 는 슬라이드 번호, `source_format` 은 `pptx`/`ppt`.
+- 변환 최대 시간 120초 (`config.py` 의 `convert_timeout_sec`). 첫 변환은 LibreOffice 가 켜지느라 몇 초 더 걸린다.
+- 발표자 노트는 결과에 없다. 본문 글머리 기호(•)는 글자로 같이 나온다 (8번에서 정리).
+- 암호 걸린 PPTX 는 `EncryptedFileError`. 암호 걸린 옛날 PPT 는 변환 실패(`ConversionError`)나 시간 초과로 나올 것으로 본다 (진짜 암호 파일로는 아직 확인 못 함).
 
 ## 테스트 파일 (`tests/samples/`)
 - [ ] 텍스트만 있는 PDF

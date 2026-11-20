@@ -14,6 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
@@ -58,6 +59,25 @@ class ExtractorClientTest {
         assertEquals("자료구조는 데이터를 효율적으로 저장하고 관리하기 위한 방법이다.", items.get(1).content());
         assertEquals(2, items.get(2).page());
         assertEquals("A stack is a LIFO structure.", items.get(2).content());
+    }
+
+    @Test
+    void extractsTextFromPptx() throws Exception {
+        List<Item> items;
+        try {
+            items = client.extract(resource("sample.pptx"));
+        } catch (ExtractionException e) {
+            // PPT 변환에는 LibreOffice 가 필요하다. 없는 PC 에서는 건너뛴다.
+            assumeFalse(e.getMessage().contains("LibreOffice 가 없어"), e.getMessage());
+            throw e;
+        }
+
+        assertEquals(4, items.size());
+        assertEquals("sample.pptx", items.get(0).sourceFile());
+        assertEquals("pptx", items.get(0).sourceFormat());
+        assertEquals(List.of(1, 1, 2, 2), items.stream().map(Item::page).toList());   // 슬라이드 번호
+        assertEquals(List.of("1장. 자료구조 개요", "스택은 후입선출 구조이다", "2장. 큐", "큐는 선입선출 구조이다"),
+                items.stream().map(Item::content).toList());
     }
 
     @Test

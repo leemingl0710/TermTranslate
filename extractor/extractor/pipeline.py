@@ -1,5 +1,6 @@
 """전체 흐름 조립.
 
+PPT/PPTX 면 PDF 로 변환                       (0단계)
 for 페이지 in PDF:
     종류 = classify_page                          (1단계)
     글자 문단 = extract_text_blocks               (2단계)
@@ -8,18 +9,16 @@ for 페이지 in PDF:
     SEARCHABLE → OCR 생략 (이미 글자가 있음)
 문서 본문 단어로 OCR 글자 고치기 (ocr_fix)
 merge: 중복 제거 + 읽는 순서 정렬               (5단계)
-
-TODO(0단계): PPT/PPTX → PDF 변환.
 """
 from pathlib import Path
 
 import pymupdf
 
 from .config import DEFAULT, Thresholds
-from .errors import (CorruptedFileError, EncryptedFileError, InputNotFoundError,
-                     UnsupportedFormatError)
+from .errors import CorruptedFileError, EncryptedFileError
 from .models import Item, PageType
 from .ocr_fix import OcrFixer
+from .stage0_input import as_pdf
 from .stage1_classify import classify_page
 from .stage2_text import extract_text_blocks
 from .stage3_select import OcrTarget, select_ocr_targets
@@ -27,22 +26,19 @@ from .stage4_ocr import OcrResult, ocr_full_page, ocr_image
 from .stage5_merge import merge
 
 
-def open_pdf(path: Path) -> "pymupdf.Document":
+def open_pdf(path: Path, display_name: str | None = None) -> "pymupdf.Document":
     """PDF를 열고, 손상·암호 파일이면 정해진 오류를 낸다.
 
-    TODO(0단계): 시그니처 판별 + PPT/PPTX → PDF 변환으로 교체.
+    display_name: 오류 메시지에 쓸 이름 (PPT 를 변환한 임시 PDF 면 원래 파일 이름).
     """
-    if not path.is_file():
-        raise InputNotFoundError(f"파일이 없습니다: {path}")
-    if path.suffix.lower() != ".pdf":
-        raise UnsupportedFormatError(f"아직 PDF만 지원합니다: {path.name}")
+    name = display_name or path.name
     try:
         doc = pymupdf.open(path, filetype="pdf")
     except (pymupdf.FileDataError, pymupdf.EmptyFileError) as e:
-        raise CorruptedFileError(f"PDF 파일이 손상되었습니다: {path.name}") from e
+        raise CorruptedFileError(f"파일이 손상되었습니다: {name}") from e
     if doc.needs_pass:
         doc.close()
-        raise EncryptedFileError(f"암호가 걸린 PDF입니다: {path.name}")
+        raise EncryptedFileError(f"암호가 걸린 파일입니다: {name}")
     return doc
 
 
@@ -93,16 +89,18 @@ def extract(path: str | Path, th: Thresholds = DEFAULT) -> list[Item]:
     ocr_items: list[Item] = []
     cache = _ImageOcrCache()
 
-    def item(page_no, origin, content, bbox, confidence=None):
-        return Item(source_file=path.name, source_format="pdf", page=page_no,
-                    origin=origin, content=content, bbox=bbox, confidence=confidence)
+    with as_pdf(path, th.convert_timeout_sec) as (pdf_path, fmt):
 
-    with open_pdf(path) as doc:
-        for page_no, page in enumerate(doc, start=1):
-            blocks = extract_text_blocks(page)
-            text_items += [item(page_no, "text", text, bbox) for text, bbox in blocks]
-            ocr_items += [item(page_no, "ocr", r.text, r.bbox, r.confidence)
-                          for r in page_ocr(page, blocks, th, cache)]
+        def item(page_no, origin, content, bbox, confidence=None):
+            return Item(source_file=path.name, source_format=fmt, page=page_no,
+                        origin=origin, content=content, bbox=bbox, confidence=confidence)
+
+        with open_pdf(pdf_path, path.name) as doc:
+            for page_no, page in enumerate(doc, start=1):
+                blocks = extract_text_blocks(page)
+                text_items += [item(page_no, "text", text, bbox) for text, bbox in blocks]
+                ocr_items += [item(page_no, "ocr", r.text, r.bbox, r.confidence)
+                              for r in page_ocr(page, blocks, th, cache)]
 
     # 문서 전체 본문을 다 모은 뒤에 고친다 (다른 페이지 본문에 나온 단어도 쓰려고)
     fixer = OcrFixer(i.content for i in text_items)

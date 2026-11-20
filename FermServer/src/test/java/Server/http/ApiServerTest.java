@@ -126,6 +126,16 @@ class ApiServerTest {
     }
 
     @Test
+    void acceptsPdfAndPptExtensions() {
+        assertTrue(ApiServer.isSupported("강의.pdf"));
+        assertTrue(ApiServer.isSupported("강의.PPTX"));
+        assertTrue(ApiServer.isSupported("old.ppt"));
+        assertFalse(ApiServer.isSupported("notes.txt"));
+        assertFalse(ApiServer.isSupported("report.docx"));
+        assertFalse(ApiServer.isSupported("pdf"));
+    }
+
+    @Test
     void uploadRequiresFilename() throws Exception {
         HttpResponse<String> res = http.send(HttpRequest.newBuilder(URI.create(base + "/documents"))
                 .POST(HttpRequest.BodyPublishers.ofByteArray("x".getBytes())).build(),
