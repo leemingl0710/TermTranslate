@@ -36,7 +36,7 @@ import java.util.concurrent.TimeUnit;
  * <ul>
  *   <li>EXTRACTOR_DIR — extractor 폴더 (기본 ../extractor, 실행 위치 기준)</li>
  *   <li>UV_PATH — uv 실행 파일 (기본: PATH 와 흔한 설치 위치에서 찾음)</li>
- *   <li>EXTRACTOR_TIMEOUT_SEC — 최대 실행 시간 (기본 300초)</li>
+ *   <li>EXTRACTOR_TIMEOUT_SEC — 최대 실행 시간 (기본 600초)</li>
  * </ul>
  */
 public final class ExtractorClient implements TextExtractor {
@@ -63,7 +63,7 @@ public final class ExtractorClient implements TextExtractor {
         Dotenv env = Dotenv.configure().ignoreIfMissing().load();
         String dir = valueOr(env.get("EXTRACTOR_DIR"), "../extractor");
         String uv = valueOr(env.get("UV_PATH"), null);
-        long sec = Long.parseLong(valueOr(env.get("EXTRACTOR_TIMEOUT_SEC"), "300"));
+        long sec = Long.parseLong(valueOr(env.get("EXTRACTOR_TIMEOUT_SEC"), "600"));
         return new ExtractorClient(Path.of(dir), uv != null ? uv : findUv(), Duration.ofSeconds(sec));
     }
 

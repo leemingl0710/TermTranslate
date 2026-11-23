@@ -16,7 +16,8 @@ PDF/PPT에서 텍스트 레이어 문장 + 이미지 속 글자(OCR)를 뽑아 �
 
 ## 자주 쓰는 명령
 ```bash
-uv run python -m extractor 파일.pdf -o out.json   # 추출
+uv run python -m extractor 파일.pdf -o out.json   # 추출 (같은 파일은 저장된 결과를 바로 돌려줌)
+uv run python -m extractor 파일.pdf --no-cache    # 저장된 결과 무시하고 새로 추출
 uv run pytest                                     # 테스트
 uv run python -m extractor.check_env              # 환경 점검
 uv add 패키지이름                                  # 패키지 추가 (uv.lock 같이 커밋)
@@ -43,7 +44,7 @@ try {
 }
 ```
 - 시간이 걸릴 수 있으니 Swing 화면 스레드에서 직접 부르지 말고 `SwingWorker` 등에서 부른다.
-- 설정은 `FermServer/.env` (생략 가능): `EXTRACTOR_DIR`(기본 `../extractor`), `UV_PATH`, `EXTRACTOR_TIMEOUT_SEC`(기본 300).
+- 설정은 `FermServer/.env` (생략 가능): `EXTRACTOR_DIR`(기본 `../extractor`), `UV_PATH`, `EXTRACTOR_TIMEOUT_SEC`(기본 600).
   이클립스에서 `UV_NOT_FOUND`가 나면 `UV_PATH`에 uv 전체 경로를 적는다.
 - extractor에 필드가 늘어나도 자바 쪽은 깨지지 않는다 (모르는 필드는 무시).
 
@@ -70,6 +71,7 @@ try {
 | `stage4_ocr.py` | 4 렌더링/이미지 추출 → RapidOCR |
 | `stage5_merge.py` | 5 통합 + 최종 중복 제거 + 정렬 |
 | `__main__.py` | 6 JSON 출력 CLI (`python -m extractor 파일 -o out.json`) |
+| `result_cache.py` | 9 같은 파일 결과 다시 쓰기 |
 | `config.py` | 기준값 (테스트 파일로 조정) |
 | `models.py` | 출력 항목 형식 |
 
@@ -90,10 +92,18 @@ try {
    - [x] 8-2 그림 속 표: 칸끼리 합치지 않고 행 단위로 `칸 | 칸` (`ocr_group.py`)
    - [x] 8-4 자바 `Item` 에 `flags` 추가, `low_confidence` 표시 (신뢰도 0.6 미만)
    - 미룸: 2단 편집, 글자로 된 표 (실제 자료에 거의 없음)
+9. [x] 속도 개선: OCR 엔진 설정, 같은 파일 결과 다시 쓰기, 서버 제한 시간 600초
 
 ## OCR 참고
-- 속도: 이 개발용 Mac(Apple Silicon) 기준 스캔 페이지 한 장 약 3~4초, 사진 한 장 약 1~4초.
-  사진 55장이 든 강의 PDF 47쪽은 약 110초 걸렸다. 서버 제한 시간은 `.env` 의 `EXTRACTOR_TIMEOUT_SEC`(기본 300초).
+- 속도 (9단계에서 줄임, 이 개발용 Mac(Apple Silicon) 기준): 시간의 95%가 OCR 이다.
+  - 글자 위치 찾기는 그림 긴 변을 1280px 이하로 줄여서, 글자 읽기는 줄 하나씩 한다 (`stage4_ocr.get_engine`).
+    2_파일입출력(그림 55개) OCR 105초 → 54초, 글자 결과 98.8% 같음.
+  - 효과 없어서 안 한 것: 여러 프로세스로 나눠 돌리기(CPU 를 이미 다 씀), 스레드 수 조정, 줄 묶음 크게.
+    여러 페이지의 같은 그림은 이미 한 번만 OCR 한다 (강의 7개에 겹치는 그림은 거의 없었음).
+  - 서버 제한 시간은 `.env` 의 `EXTRACTOR_TIMEOUT_SEC`(기본 600초). 느린 PC 를 생각해 넉넉히 잡았다.
+- 같은 파일 결과 다시 쓰기 (`result_cache.py`): 파일 내용 + extractor 코드가 같으면 `extractor/.cache/results` 에
+  저장한 결과를 바로 돌려준다. 파일 이름은 달라도 된다. 코드(.py)를 고치면 예전 결과는 안 쓴다.
+  끄기: `EXTRACTOR_CACHE=0` 또는 `--no-cache`. 위치 바꾸기: `EXTRACTOR_CACHE_DIR`. 최근 100개만 남긴다.
 - 글자 방향 판별(use_cls)은 끈다. 켜 두면 멀쩡한 긴 줄을 거꾸로 뒤집어 깨진 글자로 읽었다.
 - 고딕체의 I/l, O/0 은 모양으로 구별이 안 되어, 문서 본문 단어 + 자바 기본 이름 목록으로 고친다 (`ocr_fix.py`).
   본문에 없는 단어는 못 고친다 (예: 사진에만 나오는 클래스 이름).

@@ -30,3 +30,6 @@ __pycache__/
 
 # Java 컴파일 결과
 *.class
+
+# extractor 결과 저장 (같은 파일 다시 넣을 때 재사용)
+extractor/.cache/

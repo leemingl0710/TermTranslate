@@ -12,6 +12,11 @@ from .stage3_select import OcrTarget
 OcrResult = Fragment
 
 
+# 글자 위치 찾기에 쓰는 그림의 긴 변 상한(px). 슬라이드 한 장(780pt)이 1280px 이면
+# 14pt 글자가 약 23px 높이라 위치 찾기에는 충분하다.
+DET_MAX_SIDE = 1280
+
+
 @lru_cache(maxsize=1)
 def get_engine():
     """OCR 엔진은 프로세스당 한 번만 로드 (첫 실행 때 모델 파일을 내려받음)."""
@@ -19,11 +24,20 @@ def get_engine():
     # 최신 PP-OCRv6 인식 모델엔 한국어가 없어 v5 한국어 모델을 지정
     # use_cls=False: 글자 방향 판별 끔. 강의 자료는 똑바로 놓여 있는데, 켜 두면
     #   멀쩡한 긴 줄을 거꾸로 뒤집어 깨진 글자("이위이난위융…")로 읽는 일이 있었다.
+    # 9단계 속도 (2_파일입출력 그림 55개 기준 OCR 105초 → 54초, 글자 결과 98.8% 같음):
+    #   Det.limit_*: 글자 위치를 찾을 때만 그림 긴 변을 1280px 이하로 줄여서 찾는다.
+    #     글자 읽기는 원래 크기 그림에서 잘라 하므로 읽는 품질은 거의 같다. (54초 → 19초)
+    #   Rec.rec_batch_num=1: 줄을 하나씩 읽는다. 여러 줄을 묶으면 가장 긴 줄 길이에 맞춰
+    #     빈칸을 채우느라 오히려 느리다. (48초 → 33초)
+    # 여러 프로세스로 나눠 돌리기는 CPU 를 이미 다 써서 효과가 없었다.
     return RapidOCR(params={
         "Global.use_cls": False,
+        "Det.limit_type": "max",
+        "Det.limit_side_len": DET_MAX_SIDE,
         "Rec.lang_type": LangRec(OCR_LANG),
         "Rec.ocr_version": OCRVersion.PPOCRV5,
         "Rec.model_type": ModelType.MOBILE,
+        "Rec.rec_batch_num": 1,
     })
 
 
