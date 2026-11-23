@@ -10,11 +10,16 @@ _BLOCK_TEXT = 0  # get_text("blocks") 의 마지막 값: 0=글자, 1=이미지
 # 줄 끝 하이픈으로 끊긴 영어 단어: "algo-\nrithm" → "algorithm"
 _HYPHEN_BREAK = re.compile(r"([A-Za-z])-\n([a-z])")
 _SPACES = re.compile(r"\s+")
+# 줄 맨 앞의 글머리 기호. 기호 뒤 공백은 없어도 된다 (예: "⚫예제 13.2").
+# 하이픈·대시는 뒤에 공백이 있거나 줄 끝일 때만 (PDF 가 기호를 한 줄로 따로 저장하는 경우가 많음) (음수 "-1" 이나 "-Xmx" 같은 옵션은 그대로).
+# 번호(1. ① 가)는 뜻이 있어서 남긴다.
+_BULLET = re.compile(r"^[ \t]*(?:(?:[•●⚫▪■□◦○◆◇▶►▸➢➤✓✔·][ \t]*)+|[-–—](?:[ \t]+|$))", re.MULTILINE)
 
 
 def clean_text(raw: str) -> str:
-    """문단 안 줄바꿈을 이어 붙이고 공백을 정리한다."""
-    text = _HYPHEN_BREAK.sub(r"\1\2", raw)
+    """줄 앞 글머리 기호를 지우고, 문단 안 줄바꿈을 이어 붙이고, 공백을 정리한다."""
+    text = _BULLET.sub("", raw)
+    text = _HYPHEN_BREAK.sub(r"\1\2", text)
     return _SPACES.sub(" ", text).strip()  # 줄바꿈·탭·연속 공백 → 공백 하나
 
 

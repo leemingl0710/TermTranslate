@@ -65,7 +65,9 @@ def test_pieces_on_same_row_become_one_line():
         frag("본문입니다", 90, 100, 200, 115),
         frag("•", 72, 101, 80, 114),               # 글머리 기호가 따로 인식된 경우
     ])
-    assert [p.text for p in paras] == ["• 본문입니다"]
+    # 한 문단으로 합쳐지고, 맨 앞 글머리 기호는 clean_text 가 지운다 (8-1)
+    assert [p.text for p in paras] == ["본문입니다"]
+    assert paras[0].bbox[0] == 72
 
 
 def test_english_hyphen_break_and_weighted_confidence():

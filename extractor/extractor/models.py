@@ -21,7 +21,9 @@ class Item:
     content: str
     bbox: BBox
     confidence: Optional[float] = None  # text 이면 None
-    flags: list[str] = field(default_factory=list)  # 예: "low_confidence"
+    # 표시 (없으면 JSON 에서 빠짐): "code" 코드 캡처(줄바꿈 유지, 번역 안 해도 됨),
+    # "table" 그림 속 표 한 행("칸 | 칸"), "low_confidence" OCR 신뢰도 낮음
+    flags: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d = asdict(self)

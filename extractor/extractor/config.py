@@ -16,6 +16,8 @@ class Thresholds:
     text_similarity: float = 0.8
     # 4단계: 이 값 미만 OCR 결과는 버리거나 표시
     min_ocr_confidence: float = 0.4
+    # 8단계: 이 값 미만 OCR 결과에는 flags 에 "low_confidence" 를 단다 (버리지는 않음)
+    low_ocr_confidence: float = 0.6
     # 4단계: 스캔 페이지 렌더링 해상도
     render_dpi: int = 300
     # 0단계: LibreOffice 변환 최대 시간(초)

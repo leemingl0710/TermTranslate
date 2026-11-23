@@ -8,6 +8,9 @@ OCR 이 FileInputStream → FilelnputStream, FileOutputStream → File0utputStre
    OCR 단어가 목록에 없고, 헷갈리는 글자만 바꾸면 목록의 단어와 같아지면 그 단어로 바꾼다.
    (같은 꼴이 되는 단어가 목록에 둘 이상이면 어느 쪽인지 모르므로 그대로 둔다)
 2) 영어 글자 사이에 낀 숫자 0 → 대문자 O  (I0Exception → IOException, dir0bj → dirObj)
+3) 코드·표 안에서만 (8단계): 메소드 이름 뒤 빈 괄호 "()" 를 OCR 이 "0" 이나 ")" 로 읽은 것 고치기
+   getName0 → getName(), mkdir) → mkdir()
+   일반 문장에서는 진짜 숫자 0 일 수 있어서 하지 않는다.
 """
 import re
 from collections.abc import Iterable
@@ -75,3 +78,31 @@ class OcrFixer:
 
     def fix(self, text: str) -> str:
         return _WORD.sub(lambda m: self.fix_word(m.group(0)), text)
+
+
+# 소문자로 시작하는 메소드 이름 + 숫자 0 으로 끝남 → 0 이 "()" (예: getName0, isFile0)
+_METHOD_ZERO = re.compile(r"\b([a-z][A-Za-z0-9_]*[A-Za-z])0(?=$|[\s|,;:.)\]])")
+
+
+def _close_parens(segment: str) -> str:
+    """짝 없는 ')' 바로 앞이 영어 이름이면 '(' 를 넣는다: 'boolean mkdir)' → 'boolean mkdir()'."""
+    out, depth = [], 0
+    for ch in segment:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            if depth == 0 and out and (out[-1].isalnum() or out[-1] == "_"):
+                out.append("(")
+            else:
+                depth = max(0, depth - 1)
+        out.append(ch)
+    return "".join(out)
+
+
+def fix_parens(text: str) -> str:
+    """코드 줄·표 칸마다 메소드 빈 괄호를 고친다."""
+    lines = []
+    for line in text.split("\n"):
+        cells = [_close_parens(_METHOD_ZERO.sub(r"\1()", c)) for c in line.split(" | ")]
+        lines.append(" | ".join(cells))
+    return "\n".join(lines)

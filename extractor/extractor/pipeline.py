@@ -7,17 +7,19 @@ for 페이지 in PDF:
     SCANNED    → ocr_full_page                    (4단계, 페이지 전체 OCR)
     TEXT       → select_ocr_targets → ocr_image   (3·4단계, 사진만 OCR)
     SEARCHABLE → OCR 생략 (이미 글자가 있음)
-문서 본문 단어로 OCR 글자 고치기 (ocr_fix)
+문서 본문 단어로 OCR 글자 고치기 (ocr_fix), 코드·표는 빈 괄호도 고침
 merge: 중복 제거 + 읽는 순서 정렬               (5단계)
+remove_noise: 페이지 번호, 반복 머리말·꼬리말 지우기 (8-1)
 """
 from pathlib import Path
 
 import pymupdf
 
+from .cleanup import remove_noise
 from .config import DEFAULT, Thresholds
 from .errors import CorruptedFileError, EncryptedFileError
 from .models import Item, PageType
-from .ocr_fix import OcrFixer
+from .ocr_fix import OcrFixer, fix_parens
 from .stage0_input import as_pdf
 from .stage1_classify import classify_page
 from .stage2_text import extract_text_blocks
@@ -59,12 +61,12 @@ class _ImageOcrCache:
         if key not in self._store:
             self._store[key] = [
                 OcrResult(r.text, (r.bbox[0] - x0, r.bbox[1] - y0, r.bbox[2] - x0, r.bbox[3] - y0),
-                          r.confidence)
+                          r.confidence, r.kind)
                 for r in ocr_image(page, target, th)
             ]
         return [
             OcrResult(r.text, (r.bbox[0] + x0, r.bbox[1] + y0, r.bbox[2] + x0, r.bbox[3] + y0),
-                      r.confidence)
+                      r.confidence, r.kind)
             for r in self._store[key]
         ]
 
@@ -82,28 +84,41 @@ def page_ocr(page: "pymupdf.Page", text_blocks, th: Thresholds, cache: _ImageOcr
     return results
 
 
+def ocr_flags(r: OcrResult, th: Thresholds) -> list[str]:
+    """OCR 결과에 붙일 표시: code(코드 캡처) / table(표 행) / low_confidence(신뢰도 낮음)."""
+    flags = [r.kind] if r.kind in ("code", "table") else []
+    if r.confidence < th.low_ocr_confidence:
+        flags.append("low_confidence")
+    return flags
+
+
 def extract(path: str | Path, th: Thresholds = DEFAULT) -> list[Item]:
     """파일 하나를 받아 항목 목록을 돌려준다 (페이지 순, 페이지 안에서는 위→아래)."""
     path = Path(path)
     text_items: list[Item] = []
     ocr_items: list[Item] = []
+    page_heights: dict[int, float] = {}
     cache = _ImageOcrCache()
 
     with as_pdf(path, th.convert_timeout_sec) as (pdf_path, fmt):
 
-        def item(page_no, origin, content, bbox, confidence=None):
+        def item(page_no, origin, content, bbox, confidence=None, flags=()):
             return Item(source_file=path.name, source_format=fmt, page=page_no,
-                        origin=origin, content=content, bbox=bbox, confidence=confidence)
+                        origin=origin, content=content, bbox=bbox, confidence=confidence,
+                        flags=list(flags))
 
         with open_pdf(pdf_path, path.name) as doc:
             for page_no, page in enumerate(doc, start=1):
+                page_heights[page_no] = page.rect.height
                 blocks = extract_text_blocks(page)
                 text_items += [item(page_no, "text", text, bbox) for text, bbox in blocks]
-                ocr_items += [item(page_no, "ocr", r.text, r.bbox, r.confidence)
+                ocr_items += [item(page_no, "ocr", r.text, r.bbox, r.confidence, ocr_flags(r, th))
                               for r in page_ocr(page, blocks, th, cache)]
 
     # 문서 전체 본문을 다 모은 뒤에 고친다 (다른 페이지 본문에 나온 단어도 쓰려고)
     fixer = OcrFixer(i.content for i in text_items)
     for o in ocr_items:
         o.content = fixer.fix(o.content)
-    return merge(text_items, ocr_items, th)
+        if "code" in o.flags or "table" in o.flags:
+            o.content = fix_parens(o.content)
+    return remove_noise(merge(text_items, ocr_items, th), page_heights)

@@ -32,10 +32,25 @@ class ExtractorClientParseTest {
         assertEquals("자료구조란 데이터를 저장하는 방법이다.", text.content());
         assertEquals(List.of(72.0, 140.5, 520.3, 168.2), text.bbox());
         assertNull(text.confidence());
+        assertEquals(List.of(), text.flags());            // flags 가 없으면 빈 목록
 
-        Item ocr = items.get(1);   // 모르는 필드(flags, future_field)가 있어도 읽힌다
+        Item ocr = items.get(1);   // 모르는 필드(future_field)가 있어도 읽힌다
         assertEquals(Item.Origin.OCR, ocr.origin());
         assertEquals(0.93, ocr.confidence());
+        assertEquals(List.of("low_confidence"), ocr.flags());
+        assertTrue(ocr.hasFlag(Item.LOW_CONFIDENCE));
+    }
+
+    @Test
+    void parsesCodeItem() throws Exception {
+        String json = """
+                [{"source_file": "a.pdf", "source_format": "pdf", "page": 3, "origin": "ocr",
+                  "content": "01: import java.io.File;\\n02: public class A {",
+                  "bbox": [1, 2, 3, 4], "confidence": 0.98, "flags": ["code"]}]""";
+        Item code = ExtractorClient.parseItems(json).get(0);
+        assertTrue(code.hasFlag(Item.CODE));
+        assertEquals(List.of("01: import java.io.File;", "02: public class A {"),
+                code.content().lines().toList());   // 줄바꿈이 유지된다
     }
 
     @Test

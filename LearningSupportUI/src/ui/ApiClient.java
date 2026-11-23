@@ -57,12 +57,17 @@ public final class ApiClient {
             @JsonProperty("item_count") int itemCount) {
     }
 
-    /** 추출된 문단 하나. */
+    /** 추출된 문단 하나. flags: "code"(코드 캡처, 줄바꿈 유지), "table"(표 한 행), "low_confidence". */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record Item(
             @JsonProperty("page") int page,
             @JsonProperty("origin") String origin,
-            @JsonProperty("content") String content) {
+            @JsonProperty("content") String content,
+            @JsonProperty("flags") List<String> flags) {
+
+        public Item {
+            flags = flags == null ? List.of() : List.copyOf(flags);
+        }
     }
 
     /** 결과 화면의 용어 하나. */
