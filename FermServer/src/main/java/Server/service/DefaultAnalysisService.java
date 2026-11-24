@@ -2,10 +2,13 @@ package Server.service;
 
 import Server.db.AnalysisResultDao;
 import Server.db.DocumentDao;
+import Server.db.TermDao;
 import Server.db.UserDao;
 import Server.extract.ExtractionException;
 import Server.extract.Item;
 import Server.extract.TextExtractor;
+import Server.translate.Translation;
+import Server.translate.Translator;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -18,6 +21,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.sql.Savepoint;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -27,11 +31,13 @@ import java.util.UUID;
  * <ol>
  *   <li>파일을 업로드 폴더에 저장</li>
  *   <li>extractor 실행 → List&lt;Item&gt;</li>
- *   <li>(번역·요약·개념·용어 — 아직 없음. 만들어지면 이 자리에서 호출)</li>
- *   <li>트랜잭션 한 번에 documents + analysis_results + analysis_terms 저장</li>
+ *   <li>번역·요약·개념·시험 문제·용어 ({@link Translator}, 실제 구현은 {@link Server.translate.LlmTranslator}).
+ *       번역기가 없거나(LLM 설정 없음) 실패하면 그 칸들은 null 로 두고 계속한다</li>
+ *   <li>트랜잭션 한 번에 documents + analysis_results + terms(새 용어) + analysis_terms 저장</li>
  *   <li>result_id 반환</li>
  * </ol>
- * 2~4 중 실패하면 DB 에는 아무것도 남지 않고, 저장한 파일도 지운다.
+ * 2, 4 에서 실패하면 DB 에는 아무것도 남지 않고, 저장한 파일도 지운다.
+ * 3(번역)이 실패해도 추출 결과는 저장한다.
  */
 public final class DefaultAnalysisService implements AnalysisService {
 
@@ -48,16 +54,25 @@ public final class DefaultAnalysisService implements AnalysisService {
     private final ConnectionFactory db;
     private final Path uploadDir;
     private final String uploaderUsername;
+    private final Translator translator;
+
+    /** 번역 없이 (3단계를 건너뛰고) 추출 결과만 저장한다. */
+    public DefaultAnalysisService(TextExtractor extractor, ConnectionFactory db,
+                                  Path uploadDir, String uploaderUsername) {
+        this(extractor, db, uploadDir, uploaderUsername, null);
+    }
 
     /**
      * @param uploaderUsername 로그인이 생기기 전까지 모든 업로드를 이 사용자로 저장한다 (기본 admin).
+     * @param translator       3단계 번역·요약. null 이면 건너뛴다.
      */
     public DefaultAnalysisService(TextExtractor extractor, ConnectionFactory db,
-                                  Path uploadDir, String uploaderUsername) {
+                                  Path uploadDir, String uploaderUsername, Translator translator) {
         this.extractor = extractor;
         this.db = db;
         this.uploadDir = uploadDir.toAbsolutePath().normalize();
         this.uploaderUsername = uploaderUsername;
+        this.translator = translator;
     }
 
     @Override
@@ -82,12 +97,8 @@ public final class DefaultAnalysisService implements AnalysisService {
             // 2. 추출
             List<Item> items = extractor.extract(saved);
 
-            // 3. 번역·요약 등 — TODO: 팀원 모듈이 생기면 여기서 호출하고 아래 null 자리를 채운다.
-            String translatedText = null;
-            String explanation = null;
-            String summary = null;
-            String examQuestions = null;
-            List<Integer> termIds = List.of();
+            // 3. 번역·요약·개념·시험 문제·용어. DB 를 열기 전에 끝낸다 (LLM 을 기다리는 동안 연결을 잡고 있지 않도록).
+            Translation translation = translate(originalName, items);
 
             // 4. 한 트랜잭션으로 저장
             try (Connection conn = db.open()) {
@@ -98,8 +109,9 @@ public final class DefaultAnalysisService implements AnalysisService {
                                     + "' 가 DB 에 없습니다. Server.tools.CreateUser 로 만들어 주세요."));
                     int documentId = DocumentDao.insert(conn, userId, originalName, saved.toString());
                     int resultId = AnalysisResultDao.insert(conn, documentId, toJson(items),
-                            translatedText, explanation, summary, examQuestions);
-                    AnalysisResultDao.linkTerms(conn, resultId, termIds);
+                            translation.translatedText(), translation.explanation(),
+                            translation.summary(), translation.examQuestions());
+                    AnalysisResultDao.linkTerms(conn, resultId, saveTerms(conn, translation.terms()));
                     conn.commit();
                     stored = true;
                     // 5. 결과
@@ -126,6 +138,47 @@ public final class DefaultAnalysisService implements AnalysisService {
                     fromJson(row.sourceTextJson()),
                     row.translatedText(), row.explanation(), row.summary(), row.examQuestions(),
                     row.terms()));
+        }
+    }
+
+    /** 3단계. 번역기가 없거나 실패하면 빈 결과 (번역 오류로 업로드 전체가 실패하지 않게 한다). */
+    private Translation translate(String fileName, List<Item> items) {
+        if (translator == null || items.isEmpty()) {
+            return Translation.empty();
+        }
+        try {
+            Translation t = translator.translate(fileName, items);
+            return t == null ? Translation.empty() : t;
+        } catch (RuntimeException e) {
+            System.out.println("[번역 " + fileName + "] 실패, 추출 결과만 저장합니다: " + e);
+            return Translation.empty();
+        }
+    }
+
+    /**
+     * 용어를 사전(terms)에 넣고 term_id 를 받는다. 실패해도 업로드는 계속한다:
+     * 저장점(savepoint)까지 되돌리고 용어 없이 저장한다.
+     */
+    private static List<Integer> saveTerms(Connection conn, List<AnalysisResultDao.Term> terms) {
+        if (terms.isEmpty()) {
+            return List.of();
+        }
+        Savepoint savepoint = null;
+        try {
+            savepoint = conn.setSavepoint();
+            List<Integer> ids = TermDao.ensureIds(conn, terms);
+            conn.releaseSavepoint(savepoint);
+            return ids;
+        } catch (SQLException e) {
+            try {
+                if (savepoint != null) {
+                    conn.rollback(savepoint);
+                }
+            } catch (SQLException ignored) {
+                // 되돌리지 못하면 이어지는 저장에서 오류가 나고 전체가 되돌려진다
+            }
+            System.out.println("[번역] 용어를 사전에 저장하지 못해 용어 없이 저장합니다: " + e.getMessage());
+            return List.of();
         }
     }
 

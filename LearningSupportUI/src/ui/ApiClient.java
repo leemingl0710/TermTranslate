@@ -131,7 +131,8 @@ public final class ApiClient {
         HttpRequest req;
         try {
             req = HttpRequest.newBuilder(URI.create(baseUrl + "/documents?filename=" + name))
-                    .timeout(Duration.ofMinutes(10))   // 스캔 PDF 는 글자 인식에 오래 걸릴 수 있음
+                    // 스캔 PDF 의 글자 인식 + AI 번역·요약(묶음마다 LLM 호출)까지 기다린다
+                    .timeout(Duration.ofMinutes(30))
                     .header("Content-Type", "application/octet-stream")
                     .POST(HttpRequest.BodyPublishers.ofFile(file))
                     .build();

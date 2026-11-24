@@ -17,6 +17,16 @@ public final class DBConnection {
 
     private static final Dotenv ENV = Dotenv.configure().ignoreIfMissing().load();
 
+    static {
+        // ./mvnw exec:java 로 실행하면 JDBC 드라이버 자동 등록이 안 되어
+        // "No suitable driver found" 가 나는 경우가 있어 직접 등록한다 (이클립스 실행에는 영향 없음).
+        try {
+            Class.forName("org.postgresql.Driver");
+        } catch (ClassNotFoundException e) {
+            // 드라이버가 없으면 getConnection 에서 "No suitable driver" 오류로 알려진다
+        }
+    }
+
     private DBConnection() {
     }
 

@@ -1,12 +1,16 @@
 package Server.http;
 
 import Server.DBConnection;
+import Server.db.TermDao;
 import Server.extract.ExtractionException;
 import Server.extract.ExtractorClient;
+import Server.extract.JavaExtractor;
+import Server.extract.TextExtractor;
 import Server.service.AnalysisService;
 import Server.service.DefaultAnalysisService;
 import Server.service.ResultDetail;
 import Server.service.UploadResult;
+import Server.translate.LlmTranslator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.sun.net.httpserver.HttpExchange;
@@ -21,6 +25,7 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -43,7 +48,9 @@ import java.util.concurrent.Executors;
  * 실행: 이클립스에서 이 클래스를 Java Application 으로 실행, 또는 터미널에서 ./mvnw -q compile exec:java
  *
  * <p>설정 (.env, 모두 생략 가능): SERVER_PORT(8080), UPLOAD_DIR(uploads), MAX_UPLOAD_MB(50),
- * UPLOAD_USERNAME(admin) + extractor 설정 (ExtractorClient 참고)
+ * UPLOAD_USERNAME(admin), EXTRACTOR_ENGINE(python | java, JavaExtractor 참고)
+ * + extractor 설정 (ExtractorClient 참고) + 번역 설정 (LlmTranslator 참고,
+ * LLM_BASE_URL 이 비어 있으면 번역하지 않는다)
  */
 public final class ApiServer {
 
@@ -72,14 +79,29 @@ public final class ApiServer {
         long maxMb = Long.parseLong(env.get("MAX_UPLOAD_MB", "50"));
         String uploader = env.get("UPLOAD_USERNAME", "admin");
 
-        ExtractorClient extractor = ExtractorClient.fromEnv();
+        // 글자 추출: 기본은 파이썬 extractor. EXTRACTOR_ENGINE=java 면 자바 추출기 (pdftotext + Windows OCR)
+        boolean javaEngine = "java".equalsIgnoreCase(env.get("EXTRACTOR_ENGINE", "python").strip());
+        TextExtractor extractor = javaEngine ? new JavaExtractor() : ExtractorClient.fromEnv();
+        String extractorInfo = javaEngine
+                ? "자바 추출기 (pdftotext + Windows OCR, EXTRACTOR_ENGINE=java)"
+                : "파이썬 extractor (uv: " + ((ExtractorClient) extractor).uvPath() + ")";
+        // 번역·요약 (Server.translate.LlmTranslator). LLM_BASE_URL 이 없으면 null → 번역 없이 추출 결과만 저장.
+        // 용어 사전은 DB 의 terms 테이블을 분석할 때마다 새로 읽는다.
+        LlmTranslator translator = LlmTranslator.fromEnv(() -> {
+            try (Connection conn = DBConnection.getConnection()) {
+                return TermDao.loadAll(conn);
+            }
+        });
         AnalysisService service = new DefaultAnalysisService(
-                extractor, DBConnection::getConnection, uploadDir, uploader);
+                extractor, DBConnection::getConnection, uploadDir, uploader, translator);
         HttpServer server = start(port, service, maxMb * 1024 * 1024, uploadDir.resolve("tmp"));
 
         System.out.println("서버 시작: http://localhost:" + server.getAddress().getPort());
         System.out.println("  업로드 폴더: " + uploadDir.toAbsolutePath().normalize());
-        System.out.println("  업로드 사용자: " + uploader + ", 최대 " + maxMb + "MB, uv: " + extractor.uvPath());
+        System.out.println("  업로드 사용자: " + uploader + ", 최대 " + maxMb + "MB");
+        System.out.println("  글자 추출: " + extractorInfo);
+        System.out.println("  번역: " + (translator == null
+                ? "꺼짐 (.env 의 LLM_BASE_URL 이 비어 있음 → 추출 결과만 저장)" : translator.describe()));
         Runtime.getRuntime().addShutdownHook(new Thread(() -> server.stop(1)));
     }
 

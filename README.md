@@ -5,12 +5,15 @@
 ```
 [LearningSupportUI (Swing)] ──HTTP──▶ [FermServer] ──▶ [extractor (Python)]
                                           │
+                                          ├──▶ [LLM 서버 (OpenAI 호환)]  번역·요약 (term-translator)
+                                          │
                                           └──▶ [Neon PostgreSQL]
 ```
 | 폴더 | 역할 |
 |---|---|
 | `LearningSupportUI/` | 클라이언트 (Swing). 파일 선택 → 서버로 업로드 → 결과 표시 |
-| `FermServer/` | 서버 (HTTP, `localhost:8080`). 저장 → 텍스트 추출 → DB 저장 |
+| `FermServer/` | 서버 (HTTP, `localhost:8080`). 저장 → 텍스트 추출 → 번역·요약 → DB 저장 |
+| `FermServer/src/main/java/com/termtranslator/` | 번역·요약 파이프라인. 번역 담당 모듈(term-translator)을 복사해 온 것으로, `Server.translate.LlmTranslator` 가 호출. 고칠 때는 원본도 같이 고침 |
 | `extractor/` | PDF 텍스트 추출 (Python). 자세한 내용은 `extractor/README.md` |
 | `db/` | DB 스키마, 마이그레이션 |
 
@@ -19,6 +22,11 @@
 2. `FermServer/.env.example` 을 복사해 `FermServer/.env` 를 만들고 DB 값 채우기
 3. 이클립스: 두 프로젝트를 **Existing Maven Projects** 로 가져오기
    (이미 가져왔다면 우클릭 → Maven → Update Project. `LearningSupportUI` 는 우클릭 → Configure → Convert to Maven Project)
+
+> **Windows 스마트 앱 컨트롤이 켜진 PC**: 분석할 때 "애플리케이션 제어 정책에서 이 파일을 차단했습니다" 가 나오면
+> (uv 가 받은 서명 없는 파이썬 파일이 막힌 것) `FermServer/.env` 에 `EXTRACTOR_ENGINE=java` 를 넣고 서버를 다시 켠다.
+> 파이썬 extractor 대신 자바 추출기(`Server.extract.JavaExtractor`: PDF 글자 층은 pdftotext, 글자 없는 페이지는 Windows 내장 OCR)를 쓴다.
+> pdftotext 는 Git for Windows 에 들어 있다. PPT 는 PPTX 나 PDF 로 저장해서 올린다.
 
 ## 실행 (순서대로)
 1. **서버**: `FermServer` 의 `Server.http.ApiServer` 를 Java Application 으로 실행
@@ -38,11 +46,34 @@
 실패하면 `{"error": "종류", "message": "사용자에게 보여 줄 문장"}`
 (400 잘못된 파일 · 404 없음 · 405 잘못된 요청 방식 · 413 너무 큼 · 500 서버 오류)
 
+## 번역 · 요약 (term-translator 연동)
+업로드 처리 3단계(`DefaultAnalysisService`)에서 `Server.translate.LlmTranslator` 가 추출된 글자로
+번역 · 요약 · 개념 설명 · 퀴즈 · 용어를 만들어 결과 화면의 카드 4개를 채운다.
+
+| 결과 카드 (DB 칸) | 내용 |
+|---|---|
+| Lecture Summary (`summary`) | 단원 요약 + 페이지별 3줄 요약 |
+| Translation (`translated_text` + `analysis_terms`) | 페이지별 쉬운 영어 번역 + 자료에 나온 사전 용어 |
+| Key Concepts (`explanation`) | 핵심 개념, 개념 설명, 페이지 사이의 연결 |
+| Exam Preparation (`exam_questions`) | 복습 퀴즈 → 시험 대비 체크리스트 → 정답 |
+
+- **켜는 법**: `FermServer/.env` 에 `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` 을 채운다 (`.env.example` 의 "번역·요약" 부분 참고).
+  비워 두면 지금까지처럼 추출 결과만 저장하고 카드는 "Not available yet." 으로 나온다.
+- **용어 사전**: DB 의 `terms` 테이블을 사전으로 쓴다. `TERM_DICT_PATH` 에 CSV/TSV 파일(`ko,en,description`)을 주면 함께 쓰고,
+  자료에 나온 용어 중 `terms` 에 없는 것은 새로 넣은 뒤 `analysis_terms` 로 연결한다.
+- **실패해도 업로드는 성공**: LLM 서버가 꺼져 있거나 응답이 깨지면 그 칸만 비워 두고 추출 결과는 저장한다.
+- **요청 한도**: API 키에 분당 요청 한도가 있으면 `LLM_RATE_LIMIT_PER_MIN` (예: 30) 에 적는다. 요청 사이를 띄우고, 한도 초과(429)면 기다렸다가 다시 시도한다.
+- **시간**: 묶음(기본 4페이지)마다 LLM 을 한 번씩 부르므로 몇 분 걸릴 수 있다. 클라이언트는 업로드 응답을 최대 30분 기다린다.
+- 결과 카드에는 앞부분만 보이고, 카드 오른쪽 위 **View all** 로 전체 내용을 본다.
+- 서버 콘솔에 묶음별 진행 상황과 용어 일치율이 찍힌다 (`[번역 파일이름] ...`).
+
 ## 현재 상태
 - 로그인 없음: 모든 업로드는 `admin` 사용자로 저장 (`Server.tools.CreateUser` 로 사용자 생성)
 - PDF만 지원 (PPT는 추후)
-- 번역 · 요약 · 개념 · 시험 문제 · 용어는 아직 없음 → 결과 화면에 "Not available yet."
-  만들어지면 `DefaultAnalysisService` 의 3번 자리에서 호출
+- 번역 · 요약 · 개념 · 시험 문제 · 용어: LLM 서버를 `.env` 에 설정하면 동작 (위 "번역 · 요약" 참고).
+  실제 LLM(gemma-4-26b)과 팀 DB 로 업로드부터 저장까지 확인함 (3페이지 약 1분, 47페이지 약 10분)
+- 공용 용어 사전(`terms`)이 비어 있으면 용어를 지키도록 하는 번역(사전 기반 번역)은 동작하지 않음 → 용어를 넣거나 `TERM_DICT_PATH` 지정
+- 새 UI(`ui/platform`)는 아직 서버 결과와 연결되지 않음. 서버와 연결된 화면은 `ui.Main` (결과 카드 4개 + View all)
 
 ## 테스트
 ```bash

@@ -23,6 +23,9 @@ public class Main extends JFrame {
     private JLabel resultFileLabel;
     private JTextArea extractedTextArea;
     private final Map<String, JLabel> resultCardLabels = new HashMap<>();
+    // 결과 카드의 전체 글자. 카드에는 앞부분만 보이고 "View all" 버튼으로 전체를 본다
+    private final Map<String, String> resultCardTexts = new HashMap<>();
+    private final Map<String, JButton> resultCardButtons = new HashMap<>();
 
     public Main() {
 
@@ -180,11 +183,28 @@ private JPanel createFeatureCard(String title, String description, Map<String, J
         new Font("Segoe UI", Font.PLAIN, 14)
     );
     descriptionLabel.setForeground(new Color(100, 110, 125));
+    JComponent header = titleLabel;
     if (register != null) {
         register.put(title, descriptionLabel);
+
+        // 결과 화면: 제목 옆에 전체 내용을 보는 버튼 (내용이 생기면 켜짐)
+        JButton viewButton = new JButton("View all");
+        viewButton.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        viewButton.setFocusPainted(false);
+        viewButton.setEnabled(false);
+        viewButton.addActionListener(e -> showFullText(title));
+        resultCardButtons.put(title, viewButton);
+
+        JPanel headerRow = new JPanel(new BorderLayout(10, 0));
+        headerRow.setOpaque(false);
+        headerRow.add(titleLabel, BorderLayout.CENTER);
+        headerRow.add(viewButton, BorderLayout.EAST);
+        headerRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        headerRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, headerRow.getPreferredSize().height));
+        header = headerRow;
     }
 
-    card.add(titleLabel);
+    card.add(header);
     card.add(Box.createVerticalStrut(12));
     card.add(descriptionLabel);
 
@@ -209,7 +229,7 @@ private JPanel createResultPage() {
     JLabel subtitle = new JLabel(
         "No analysis yet. Upload a PDF on the File Upload page."
     );
-    subtitle.setFont(new Font("Segoe UI", Font.PLAIN, 14));
+    subtitle.setFont(koreanFont(Font.PLAIN, 14));   // 분석한 파일 이름이 들어감 (한글 이름)
     subtitle.setForeground(new Color(100, 110, 125));
     resultFileLabel = subtitle;
 
@@ -420,7 +440,7 @@ private JPanel createEvaluationPage() {
 	JTextArea commentArea = new JTextArea(6,30);
 	commentArea.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
 	commentArea.setBackground(Color.WHITE);
-	commentArea.setFont(new Font("Segoe UI",Font.PLAIN,14));
+	commentArea.setFont(koreanFont(Font.PLAIN, 14));   // 한글로 입력해도 보이게
 	commentArea.setLineWrap(true);
 	commentArea.setWrapStyleWord(true);
 	
@@ -480,7 +500,7 @@ private JPanel createUploadPage() {
 DefaultListModel<String> fileModel = new DefaultListModel<>();
 JList<String> fileList = new JList<>(fileModel);
 
-fileList.setFont(new Font("Segoe UI", Font.PLAIN, 15));
+fileList.setFont(koreanFont(Font.PLAIN, 15));   // 한글 파일 이름
 fileList.setBackground(Color.WHITE);
 fileList.setForeground(new Color(35, 55, 90));
 fileList.setSelectionBackground(new Color(220, 233, 248));
@@ -625,7 +645,8 @@ for (JButton button : buttons) {
                 ApiClient.AnalysisResult last = null;
                 for (int i = 0; i < files.size(); i++) {
                     File file = files.get(i);
-                    publish("Analyzing " + (i + 1) + "/" + files.size() + ": " + file.getName() + " ...");
+                    publish("Analyzing " + (i + 1) + "/" + files.size() + ": " + file.getName()
+                            + " ... (AI translation and summary can take a few minutes)");
                     try {
                         ApiClient.UploadResult uploaded = api.upload(file.toPath());
                         last = api.getResult(uploaded.resultId());
@@ -685,31 +706,80 @@ for (JButton button : buttons) {
         extractedTextArea.setText(items.isEmpty() ? "No text found in this file." : text.toString().strip());
         extractedTextArea.setCaretPosition(0);
 
+        // Translation 카드: 번역문이 있으면 번역문, 없으면 용어 목록. 전체 보기에는 둘 다 보여 준다
         String translation = r.translatedText();
-        if (translation == null && r.terms() != null && !r.terms().isEmpty()) {
-            StringBuilder t = new StringBuilder();
-            for (ApiClient.Term term : r.terms()) {
-                t.append(term.korean()).append(" — ").append(term.english() == null ? "" : term.english()).append("\n");
+        String translationFull = translation;
+        if (r.terms() != null && !r.terms().isEmpty()) {
+            if (translation == null) {
+                translation = termList(r.terms(), false);
             }
-            translation = t.toString();
+            translationFull = (translationFull == null ? "" : translationFull.strip() + "\n\n")
+                    + "Key terms\n" + termList(r.terms(), true);
         }
-        setCardText("Lecture Summary", r.summary());
-        setCardText("Translation", translation);
-        setCardText("Key Concepts", r.explanation());
-        setCardText("Exam Preparation", r.examQuestions());
+        setCardText("Lecture Summary", r.summary(), r.summary());
+        setCardText("Translation", translation, translationFull);
+        setCardText("Key Concepts", r.explanation(), r.explanation());
+        setCardText("Exam Preparation", r.examQuestions(), r.examQuestions());
     }
 
-    private void setCardText(String card, String value) {
+    // 용어 목록: "응력 — stress" 한 줄씩. withExplanation 이면 뒤에 쉬운 설명을 붙인다
+    private static String termList(List<ApiClient.Term> terms, boolean withExplanation) {
+        StringBuilder t = new StringBuilder();
+        for (ApiClient.Term term : terms) {
+            t.append(term.korean()).append(" — ").append(term.english() == null ? "" : term.english());
+            if (withExplanation && term.explanation() != null && !term.explanation().isBlank()) {
+                t.append(": ").append(term.explanation().strip());
+            }
+            t.append("\n");
+        }
+        return t.toString();
+    }
+
+    // preview: 카드에 보일 글자 (앞 300자), full: "View all" 로 볼 전체 글자
+    private void setCardText(String card, String preview, String full) {
         JLabel label = resultCardLabels.get(card);
         if (label == null) {
             return;
         }
-        String shown = value == null || value.isBlank() ? "Not available yet." : value.strip();
+        String shown = preview == null || preview.isBlank() ? "Not available yet." : preview.strip();
         if (shown.length() > 300) {
             shown = shown.substring(0, 300) + "...";
         }
         String html = shown.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>");
         label.setText("<html>" + html + "</html>");
+
+        boolean hasFull = full != null && !full.isBlank();
+        resultCardTexts.put(card, hasFull ? full.strip() : null);
+        JButton viewButton = resultCardButtons.get(card);
+        if (viewButton != null) {
+            viewButton.setEnabled(hasFull);
+        }
+    }
+
+    // 결과 카드의 전체 글자를 스크롤되는 창으로 보여 준다
+    private void showFullText(String card) {
+        String text = resultCardTexts.get(card);
+        if (text == null) {
+            return;
+        }
+        JTextArea area = new JTextArea(text);
+        area.setEditable(false);
+        area.setLineWrap(true);
+        area.setWrapStyleWord(true);
+        area.setFont(new Font("Dialog", Font.PLAIN, 14));   // 한글 용어도 보이는 글꼴
+        area.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
+        area.setCaretPosition(0);
+        JScrollPane scroll = new JScrollPane(area);
+        scroll.setPreferredSize(new Dimension(720, 480));
+        JOptionPane.showMessageDialog(this, scroll, card, JOptionPane.PLAIN_MESSAGE);
+    }
+
+    /**
+     * 한글(파일 이름, 사용자가 입력한 글)이 들어가는 곳에 쓰는 글꼴.
+     * Segoe UI 에는 한글이 없어 □ 로 보인다. Dialog 는 자바 기본 글꼴로, 운영체제의 한글 글꼴로 이어진다.
+     */
+    private static Font koreanFont(int style, int size) {
+        return new Font(Font.DIALOG, style, size);
     }
 
     private void showPage(String pageName) {

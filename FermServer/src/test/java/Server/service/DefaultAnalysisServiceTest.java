@@ -1,11 +1,14 @@
 package Server.service;
 
 import Server.extract.ExtractionException;
+import Server.extract.Item;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.SQLException;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 
@@ -43,6 +46,27 @@ class DefaultAnalysisServiceTest {
         try (Stream<Path> left = Files.list(uploads)) {
             assertEquals(0, left.count(), "저장했던 파일·폴더가 지워져야 함");
         }
+    }
+
+    @Test
+    void translationFailureStillSavesExtraction(@TempDir Path tmp) throws Exception {
+        AtomicBoolean translated = new AtomicBoolean(false);
+        DefaultAnalysisService service = new DefaultAnalysisService(
+                file -> List.of(new Item("a.pdf", "pdf", 1, Item.Origin.TEXT, "응력", List.of(), null)),
+                () -> {
+                    throw new SQLException("DB 없음 (테스트)");
+                },
+                tmp.resolve("uploads"), "admin",
+                (name, items) -> {
+                    translated.set(true);
+                    assertEquals(1, items.size(), "추출 결과를 그대로 넘긴다");
+                    throw new IllegalStateException("LLM 오류 (테스트)");
+                });
+
+        Path upload = Files.writeString(tmp.resolve("part"), "%PDF");
+        SQLException e = assertThrows(SQLException.class, () -> service.analyze("a.pdf", upload));
+        assertTrue(translated.get(), "추출 뒤에 번역을 부른다");
+        assertEquals("DB 없음 (테스트)", e.getMessage(), "번역 오류는 삼키고 저장 단계까지 간다");
     }
 
     @Test
