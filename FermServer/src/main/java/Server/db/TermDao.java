@@ -18,8 +18,11 @@ public final class TermDao {
     private TermDao() {
     }
 
-    /** 용어 사전 한 줄 (용어 사전 화면용, term_id 포함). */
-    public record Entry(int termId, String korean, String english, String explanation) {
+    /**
+     * 용어 사전 한 줄 (용어 사전 화면용, term_id 포함).
+     * verified: 사람이 넣거나 확인한 용어면 true, 분석 중 자동으로 들어가 아직 확인 전이면 false.
+     */
+    public record Entry(int termId, String korean, String english, String explanation, boolean verified) {
     }
 
     /** PostgreSQL 에서 같은 값이 이미 있을 때(UNIQUE 위반) 오는 SQLState. */
@@ -33,12 +36,20 @@ public final class TermDao {
 
     /**
      * 한국어 또는 영어에 query 가 들어간 용어 (대소문자 무시, 한국어 가나다순).
-     * query 가 비어 있으면 전체.
+     * query 가 비어 있으면 전체. unverifiedOnly 면 확인 전(자동 추가) 용어만.
      */
-    public static List<Entry> search(Connection conn, String query, int limit) throws SQLException {
+    public static List<Entry> search(Connection conn, String query, boolean unverifiedOnly, int limit)
+            throws SQLException {
         boolean filter = query != null && !query.isBlank();
-        String sql = "SELECT term_id, korean_term, english_term, explanation FROM terms "
-                + (filter ? "WHERE korean_term ILIKE ? ESCAPE '\\' OR english_term ILIKE ? ESCAPE '\\' " : "")
+        List<String> where = new ArrayList<>();
+        if (filter) {
+            where.add("(korean_term ILIKE ? ESCAPE '\\' OR english_term ILIKE ? ESCAPE '\\')");
+        }
+        if (unverifiedOnly) {
+            where.add("NOT verified");
+        }
+        String sql = "SELECT term_id, korean_term, english_term, explanation, verified FROM terms "
+                + (where.isEmpty() ? "" : "WHERE " + String.join(" AND ", where) + " ")
                 + "ORDER BY korean_term LIMIT ?";
         List<Entry> rows = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -51,17 +62,19 @@ public final class TermDao {
             ps.setInt(i, limit);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    rows.add(new Entry(rs.getInt(1), rs.getString(2), rs.getString(3), rs.getString(4)));
+                    rows.add(new Entry(rs.getInt(1), rs.getString(2), rs.getString(3), rs.getString(4),
+                            rs.getBoolean(5)));
                 }
             }
         }
         return rows;
     }
 
-    /** 새 용어를 넣고 term_id 를 돌려준다. 같은 한국어 용어가 있으면 SQLException(23505). */
+    /** 사람이 넣는 새 용어 (확인됨). term_id 를 돌려준다. 같은 한국어 용어가 있으면 SQLException(23505). */
     public static int insert(Connection conn, String korean, String english, String explanation)
             throws SQLException {
-        String sql = "INSERT INTO terms (korean_term, english_term, explanation) VALUES (?, ?, ?) RETURNING term_id";
+        String sql = "INSERT INTO terms (korean_term, english_term, explanation, verified) VALUES (?, ?, ?, true) "
+                + "RETURNING term_id";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, korean);
             ps.setString(2, english);
@@ -73,16 +86,34 @@ public final class TermDao {
         }
     }
 
-    /** 용어를 고친다. 없는 번호면 false. 다른 용어와 한국어가 겹치면 SQLException(23505). */
+    /**
+     * 용어를 고친다. 사람이 고친 것이므로 확인됨(verified)으로 바꾼다.
+     * 없는 번호면 false. 다른 용어와 한국어가 겹치면 SQLException(23505).
+     */
     public static boolean update(Connection conn, int termId, String korean, String english, String explanation)
             throws SQLException {
-        String sql = "UPDATE terms SET korean_term = ?, english_term = ?, explanation = ? WHERE term_id = ?";
+        String sql = "UPDATE terms SET korean_term = ?, english_term = ?, explanation = ?, verified = true "
+                + "WHERE term_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, korean);
             ps.setString(2, english);
             ps.setString(3, explanation);
             ps.setInt(4, termId);
             return ps.executeUpdate() == 1;
+        }
+    }
+
+    /** 자동으로 들어간 용어를 그대로 승인한다 (확인됨으로). 승인한 용어를 돌려주고, 없는 번호면 null. */
+    public static Entry approve(Connection conn, int termId) throws SQLException {
+        String sql = "UPDATE terms SET verified = true WHERE term_id = ? "
+                + "RETURNING term_id, korean_term, english_term, explanation, verified";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, termId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next()
+                        ? new Entry(rs.getInt(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getBoolean(5))
+                        : null;
+            }
         }
     }
 
@@ -94,7 +125,7 @@ public final class TermDao {
         }
     }
 
-    /** 번역에 쓸 사전: 영어 번역이 적힌 용어 전체. */
+    /** 번역에 쓸 사전: 영어 번역이 적힌 용어 전체 (확인 전 용어도 포함해 바로 쓴다). */
     public static List<Term> loadAll(Connection conn) throws SQLException {
         String sql = "SELECT korean_term, english_term, explanation FROM terms "
                 + "WHERE english_term IS NOT NULL AND english_term <> '' ORDER BY term_id";
@@ -109,11 +140,11 @@ public final class TermDao {
     }
 
     /**
-     * 용어들의 term_id 를 돌려준다. 사전에 없는 한국어 용어는 새로 넣고,
-     * 이미 있으면 기존 값(영어·설명)을 그대로 둔다. 길이가 맞지 않는 용어는 건너뛴다.
+     * 용어들의 term_id 를 돌려준다. 사전에 없는 한국어 용어는 "확인 전(verified=false)" 으로 새로 넣고,
+     * 이미 있으면 기존 값(영어·설명·확인 여부)을 그대로 둔다. 길이가 맞지 않는 용어는 건너뛴다.
      */
     public static List<Integer> ensureIds(Connection conn, List<Term> terms) throws SQLException {
-        String insert = "INSERT INTO terms (korean_term, english_term, explanation) VALUES (?, ?, ?) "
+        String insert = "INSERT INTO terms (korean_term, english_term, explanation, verified) VALUES (?, ?, ?, false) "
                 + "ON CONFLICT (korean_term) DO NOTHING";
         String select = "SELECT term_id FROM terms WHERE korean_term = ?";
         List<Integer> ids = new ArrayList<>();

@@ -108,13 +108,27 @@ public final class ApiClient {
             @JsonProperty("term_count") int termCount) {
     }
 
-    /** 용어 사전 한 줄 (GET/POST/PUT /terms). english·explanation 은 없으면 null. */
+    /**
+     * 용어 사전 한 줄 (GET/POST/PUT /terms). english·explanation 은 없으면 null.
+     * verified: 사람이 넣거나 확인했으면 true, 분석 중 자동으로 들어가 확인 전이면 false
+     * (예전 서버라 값이 없으면 null → 확인됨으로 본다).
+     */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record TermEntry(
             @JsonProperty("term_id") int termId,
             @JsonProperty("korean") String korean,
             @JsonProperty("english") String english,
-            @JsonProperty("explanation") String explanation) {
+            @JsonProperty("explanation") String explanation,
+            @JsonProperty("verified") Boolean verified) {
+
+        public TermEntry(int termId, String korean, String english, String explanation) {
+            this(termId, korean, english, explanation, true);
+        }
+
+        /** 자동으로 들어와 아직 사람이 확인하지 않은 용어인가 */
+        public boolean needsReview() {
+            return Boolean.FALSE.equals(verified);
+        }
     }
 
     private static final ObjectMapper JSON = new ObjectMapper()
@@ -194,9 +208,25 @@ public final class ApiClient {
 
     /** 한국어·영어에 query 가 들어간 용어. 비우면 전체. */
     public List<TermEntry> searchTerms(String query) throws ApiException {
-        HttpRequest req = HttpRequest.newBuilder(URI.create(baseUrl + "/terms" + query(query)))
+        return searchTerms(query, false);
+    }
+
+    /** unverifiedOnly 면 자동으로 들어와 확인 전인 용어만. */
+    public List<TermEntry> searchTerms(String query, boolean unverifiedOnly) throws ApiException {
+        String q = query(query);
+        if (unverifiedOnly) {
+            q += (q.isEmpty() ? "?" : "&") + "unverified=true";
+        }
+        HttpRequest req = HttpRequest.newBuilder(URI.create(baseUrl + "/terms" + q))
                 .timeout(Duration.ofSeconds(30)).GET().build();
         return send(req, new TypeReference<List<TermEntry>>() { });
+    }
+
+    /** 자동으로 들어간 용어를 그대로 승인한다. 없는 용어면 ApiException(404). */
+    public TermEntry approveTerm(int termId) throws ApiException {
+        HttpRequest req = HttpRequest.newBuilder(URI.create(baseUrl + "/terms/" + termId + "/approve"))
+                .timeout(Duration.ofSeconds(30)).POST(HttpRequest.BodyPublishers.noBody()).build();
+        return send(req, TermEntry.class);
     }
 
     /** 용어를 추가한다. 같은 한국어 용어가 있으면 ApiException(409, DUPLICATE_TERM). */

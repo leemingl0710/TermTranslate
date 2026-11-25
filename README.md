@@ -44,9 +44,10 @@
 | `GET /results/{id}` | 결과 조회 | `200 {"file_name", "items", "summary", ...}` |
 | `GET /results?q=강의` | 이력 목록 (최근 것부터, `q`: 파일 이름 검색, 생략하면 전체) | `200 [{"result_id", "file_name", "analyzed_at", "item_count", "translated", "term_count"}]` |
 | `DELETE /results/{id}` | 이력 삭제 (문서 · 업로드 파일 · 용어 연결 포함, 용어 사전은 그대로) | `200 {"deleted":true}` |
-| `GET /terms?q=응력` | 용어 사전 검색 (`q`: 한국어 · 영어, 생략하면 전체) | `200 [{"term_id", "korean", "english", "explanation"}]` |
+| `GET /terms?q=응력&unverified=true` | 용어 사전 검색 (`q`: 한국어 · 영어, 생략하면 전체 / `unverified=true`: 확인 전 용어만) | `200 [{"term_id", "korean", "english", "explanation", "verified"}]` |
 | `POST /terms` (본문: `{"korean", "english", "explanation"}`) | 용어 추가 | `201 {"term_id", ...}` |
 | `PUT /terms/{id}` (본문 같음) | 용어 수정 | `200 {"term_id", ...}` |
+| `POST /terms/{id}/approve` | 자동으로 들어간 용어 승인 | `200 {"term_id", ..., "verified":true}` |
 | `DELETE /terms/{id}` | 용어 삭제 | `200 {"deleted":true}` |
 
 실패하면 `{"error": "종류", "message": "사용자에게 보여 줄 문장"}`
@@ -62,7 +63,7 @@
 | 결과 카드 (DB 칸) | 내용 |
 |---|---|
 | Lecture Summary (`summary`) | 단원 요약 + 페이지별 3줄 요약 |
-| Translation (`translated_text` + `analysis_terms`) | 페이지별 쉬운 영어 번역 + 자료에 나온 사전 용어 |
+| Translation (`translated_text` + `analysis_terms`) | 페이지별 쉬운 영어 번역 + 자료에 나온 사전 용어 + LLM 이 새로 찾은 전공용어 |
 | Key Concepts (`explanation`) | 핵심 개념, 개념 설명, 페이지 사이의 연결 |
 | Exam Preparation (`exam_questions`) | 복습 퀴즈 → 시험 대비 체크리스트 → 정답 |
 
@@ -70,6 +71,10 @@
   비워 두면 지금까지처럼 추출 결과만 저장하고 카드는 "Not available yet." 으로 나온다.
 - **용어 사전**: DB 의 `terms` 테이블을 사전으로 쓴다. `TERM_DICT_PATH` 에 CSV/TSV 파일(`ko,en,description`)을 주면 함께 쓰고,
   자료에 나온 용어 중 `terms` 에 없는 것은 새로 넣은 뒤 `analysis_terms` 로 연결한다.
+- **전공용어 자동 인식**: LLM 이 묶음마다 사전에 없는 전공용어 후보(`newTerms`)를 찾고, `TermFilter` 가 다시 거른다
+  (원문에 실제로 있는지, 일반 단어·코드 이름·문장이 아닌지, 길이). 남은 용어는 `terms` 에 `verified = false`(확인 전)로 들어가고
+  다음 분석부터 바로 사전으로 쓰인다. 용어 사전 화면에서 Approve(승인) · Edit(수정하면 확인됨) · Delete 로 다듬는다.
+  DB 에 `verified` 칸이 필요하다 → `db/migrations/002_terms_verified.sql` (Neon 에 적용 완료).
 - **실패해도 업로드는 성공**: LLM 서버가 꺼져 있거나 응답이 깨지면 그 칸만 비워 두고 추출 결과는 저장한다.
 - **요청 한도**: API 키에 분당 요청 한도가 있으면 `LLM_RATE_LIMIT_PER_MIN` (예: 30) 에 적는다. 요청 사이를 띄우고, 한도 초과(429)면 기다렸다가 다시 시도한다.
 - **시간**: 묶음(기본 4페이지)마다 LLM 을 한 번씩 부르므로 몇 분 걸릴 수 있다. 클라이언트는 업로드 응답을 최대 30분 기다린다.
@@ -82,9 +87,9 @@
   자바 추출기(`EXTRACTOR_ENGINE=java`)는 PDF, PPTX 만
 - 번역 · 요약 · 개념 · 시험 문제 · 용어: LLM 서버를 `.env` 에 설정하면 동작 (위 "번역 · 요약" 참고).
   실제 LLM(gemma-4-26b)과 팀 DB 로 업로드부터 저장까지 확인함 (3페이지 약 1분, 47페이지 약 10분)
-- 공용 용어 사전(`terms`)이 비어 있으면 용어를 지키도록 하는 번역(사전 기반 번역)은 동작하지 않음 → 용어를 넣거나 `TERM_DICT_PATH` 지정
+- 공용 용어 사전(`terms`)은 분석할 때마다 LLM 이 찾은 전공용어로 채워짐 (확인 전 상태). 자동 인식은 LLM 판단이라 가끔 일반 단어가 섞이니 용어 사전 화면에서 확인 필요
 - 새 UI(`ui/platform`, 실행: `ui.platform.MainFrame`): 업로드(여러 파일 순서대로) · 결과(페이지별 원문 ↔ 번역) ·
-  이력(목록 · 검색 · 보기 · 삭제) · 용어 사전(검색 · 추가 · 수정 · 삭제)이 서버와 연결됨.
+  이력(목록 · 검색 · 보기 · 삭제) · 용어 사전(검색 · 추가 · 수정 · 삭제 · 자동 추가 용어 승인)이 서버와 연결됨.
   로그인 · 단원 · 평가 · OCR 확인 화면은 아직 데모. 기존 화면 `ui.Main` 도 그대로 동작
 
 ## 테스트

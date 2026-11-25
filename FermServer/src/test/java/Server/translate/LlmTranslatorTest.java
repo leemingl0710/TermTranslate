@@ -95,4 +95,16 @@ class LlmTranslatorTest {
         assertEquals(1, pages.get(0).number());
         assertEquals("하나\n\n하나-2", pages.get(0).text());
     }
+
+    @Test
+    void newTermsComeAfterDictionaryTerms() {
+        com.termtranslator.core.Models.PipelineResult result = new com.termtranslator.core.Models.PipelineResult(
+                "m", "English", List.of(), null, new com.termtranslator.core.RunStats());
+        List<com.termtranslator.core.Models.TermMatch> found = List.of(new com.termtranslator.core.Models.TermMatch(
+                new com.termtranslator.core.Models.Term("응력", "stress", "사전 설명"), 2));
+        Translation t = LlmTranslator.toTranslation(result, found,
+                List.of(new Term("직렬화", "serialization", "Turning objects into bytes.")));
+        assertEquals(List.of("응력", "직렬화"), t.terms().stream().map(Term::korean).toList());
+        assertEquals("serialization", t.terms().get(1).english());
+    }
 }

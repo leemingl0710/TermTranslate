@@ -28,8 +28,16 @@ public final class Models {
     /** 페이지별 결과 */
     public record PageResult(int page, String translation, List<String> summary, String linksToPrevious) {}
 
-    /** 묶음(여러 페이지) 단위 LLM 응답 */
-    public record BundleResult(List<PageResult> pages, String conceptExplanation, String bundleSummary) {
+    /**
+     * 묶음(여러 페이지) 단위 LLM 응답.
+     * newTerms: 사전에 없는데 이 페이지들에 나온 전공용어 후보 (없거나 형식이 틀리면 빈 목록).
+     */
+    public record BundleResult(List<PageResult> pages, String conceptExplanation, String bundleSummary,
+                               List<TermEntry> newTerms) {
+        public BundleResult(List<PageResult> pages, String conceptExplanation, String bundleSummary) {
+            this(pages, conceptExplanation, bundleSummary, List.of());
+        }
+
         static BundleResult fromJson(Map<String, Object> m) {
             List<PageResult> pages = new ArrayList<>();
             for (Map<String, Object> p : Json.objList(m, "pages")) {
@@ -37,7 +45,11 @@ public final class Models {
                         Json.strList(p, "summary"), Json.str(p, "linksToPrevious")));
             }
             if (pages.isEmpty()) throw new IllegalArgumentException("\"pages\" 배열이 비어 있음");
-            return new BundleResult(pages, Json.str(m, "conceptExplanation"), Json.str(m, "bundleSummary"));
+            List<TermEntry> newTerms = new ArrayList<>();
+            for (Map<String, Object> t : Json.objList(m, "newTerms")) {
+                newTerms.add(new TermEntry(Json.str(t, "ko"), Json.str(t, "en"), Json.str(t, "easyExplanation")));
+            }
+            return new BundleResult(pages, Json.str(m, "conceptExplanation"), Json.str(m, "bundleSummary"), newTerms);
         }
     }
 

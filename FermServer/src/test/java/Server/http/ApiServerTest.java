@@ -100,20 +100,38 @@ class ApiServerTest {
 
     /** 메모리에 용어를 들고 있는 가짜 용어 사전. 규칙은 진짜와 같게: 한국어 필수, 중복 금지. */
     static class FakeTerms implements TermService {
-        final List<TermEntry> rows = new ArrayList<>(List.of(new TermEntry(1, "응력", "stress", "단위 면적당 힘")));
+        final List<TermEntry> rows = new ArrayList<>(List.of(
+                new TermEntry(1, "응력", "stress", "단위 면적당 힘", true),
+                new TermEntry(2, "직렬화", "serialization", null, false)));
         String searched;
+        Boolean searchedUnverified;
 
         @Override
-        public List<TermEntry> search(String query) {
+        public List<TermEntry> search(String query, boolean unverifiedOnly) {
             searched = query;
-            return rows.stream().filter(t -> t.korean().contains(query) || (t.english() != null
-                    && t.english().contains(query))).toList();
+            searchedUnverified = unverifiedOnly;
+            return rows.stream().filter(t -> !unverifiedOnly || !t.verified())
+                    .filter(t -> t.korean().contains(query) || (t.english() != null
+                            && t.english().contains(query))).toList();
+        }
+
+        @Override
+        public Optional<TermEntry> approve(int termId) {
+            for (int i = 0; i < rows.size(); i++) {
+                TermEntry t = rows.get(i);
+                if (t.termId() == termId) {
+                    TermEntry ok = new TermEntry(termId, t.korean(), t.english(), t.explanation(), true);
+                    rows.set(i, ok);
+                    return Optional.of(ok);
+                }
+            }
+            return Optional.empty();
         }
 
         @Override
         public TermEntry add(String korean, String english, String explanation) throws TermException {
             check(korean, -1);
-            TermEntry t = new TermEntry(rows.size() + 1, korean.strip(), english, explanation);
+            TermEntry t = new TermEntry(rows.size() + 1, korean.strip(), english, explanation, true);
             rows.add(t);
             return t;
         }
@@ -124,7 +142,7 @@ class ApiServerTest {
             check(korean, termId);
             for (int i = 0; i < rows.size(); i++) {
                 if (rows.get(i).termId() == termId) {
-                    TermEntry t = new TermEntry(termId, korean.strip(), english, explanation);
+                    TermEntry t = new TermEntry(termId, korean.strip(), english, explanation, true);
                     rows.set(i, t);
                     return Optional.of(t);
                 }
@@ -325,8 +343,33 @@ class ApiServerTest {
         assertEquals(1, list.get(0).get("term_id").asInt());
         assertEquals("stress", list.get(0).get("english").asText());
         assertEquals("단위 면적당 힘", list.get(0).get("explanation").asText());
+        assertTrue(list.get(0).get("verified").asBoolean());
+        assertEquals(false, terms.searchedUnverified, "unverified 가 없으면 전체");
         assertEquals(200, get("/terms").statusCode());
         assertEquals("", terms.searched);
+    }
+
+    @Test
+    void searchUnverifiedOnly() throws Exception {
+        JsonNode list = JSON.readTree(get("/terms?unverified=true").body());
+        assertEquals(true, terms.searchedUnverified);
+        assertEquals(1, list.size());
+        assertEquals("직렬화", list.get(0).get("korean").asText());
+        assertFalse(list.get(0).get("verified").asBoolean());
+    }
+
+    @Test
+    void approveTerm() throws Exception {
+        HttpResponse<String> res = send("POST", "/terms/2/approve", null);
+        assertEquals(200, res.statusCode());
+        JsonNode body = JSON.readTree(res.body());
+        assertEquals("직렬화", body.get("korean").asText());
+        assertTrue(body.get("verified").asBoolean());
+        assertTrue(terms.rows.get(1).verified());
+
+        assertEquals(404, send("POST", "/terms/99/approve", null).statusCode());
+        assertEquals(400, send("POST", "/terms/abc/approve", null).statusCode());
+        assertEquals(404, send("POST", "/terms/2/other", null).statusCode());
     }
 
     @Test
@@ -336,8 +379,9 @@ class ApiServerTest {
         assertEquals(201, res.statusCode());
         JsonNode body = JSON.readTree(res.body());
         assertEquals("변형률", body.get("korean").asText());
-        assertEquals(2, body.get("term_id").asInt());
-        assertEquals(2, terms.rows.size());
+        assertEquals(3, body.get("term_id").asInt());
+        assertTrue(body.get("verified").asBoolean(), "사람이 넣은 용어는 확인됨");
+        assertEquals(3, terms.rows.size());
     }
 
     @Test
@@ -364,7 +408,8 @@ class ApiServerTest {
 
         assertEquals(200, send("DELETE", "/terms/1", null).statusCode());
         assertEquals(404, send("DELETE", "/terms/1", null).statusCode());
-        assertEquals(405, send("POST", "/terms/1", "{}").statusCode());
+        assertEquals(404, send("POST", "/terms/1", "{}").statusCode(), "POST 는 /terms/{id}/approve 만");
+        assertEquals(405, send("PATCH", "/terms/1", "{}").statusCode());
     }
 
     @Test

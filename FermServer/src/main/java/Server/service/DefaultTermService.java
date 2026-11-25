@@ -11,6 +11,7 @@ import java.util.Optional;
 /**
  * 용어 사전 관리 (Neon terms 테이블).
  * 여기서 넣은 용어는 다음 분석부터 번역기(LlmTranslator)의 사전으로 쓰인다.
+ * 분석 중 LLM 이 찾은 용어는 확인 전(verified=false)으로 들어오고, 승인하거나 고치면 확인됨이 된다.
  *
  * <p>규칙: 한국어 용어는 꼭 있어야 하고 100자 이하, 영어도 100자 이하 (DB 칸 크기).
  * 같은 한국어 용어는 하나만 (DB UNIQUE). 앞뒤 공백은 지우고, 빈 영어·설명은 null 로 저장한다.
@@ -27,9 +28,10 @@ public final class DefaultTermService implements TermService {
     }
 
     @Override
-    public List<TermEntry> search(String query) throws SQLException {
+    public List<TermEntry> search(String query, boolean unverifiedOnly) throws SQLException {
         try (Connection conn = db.open()) {
-            return TermDao.search(conn, query, MAX_ROWS).stream().map(DefaultTermService::toEntry).toList();
+            return TermDao.search(conn, query, unverifiedOnly, MAX_ROWS).stream()
+                    .map(DefaultTermService::toEntry).toList();
         }
     }
 
@@ -38,7 +40,7 @@ public final class DefaultTermService implements TermService {
         Clean c = clean(korean, english, explanation);
         try (Connection conn = db.open()) {
             int id = TermDao.insert(conn, c.korean, c.english, c.explanation);
-            return new TermEntry(id, c.korean, c.english, c.explanation);
+            return new TermEntry(id, c.korean, c.english, c.explanation, true);
         } catch (SQLException e) {
             throw duplicateOr(e, c.korean);
         }
@@ -52,9 +54,16 @@ public final class DefaultTermService implements TermService {
             if (!TermDao.update(conn, termId, c.korean, c.english, c.explanation)) {
                 return Optional.empty();
             }
-            return Optional.of(new TermEntry(termId, c.korean, c.english, c.explanation));
+            return Optional.of(new TermEntry(termId, c.korean, c.english, c.explanation, true));
         } catch (SQLException e) {
             throw duplicateOr(e, c.korean);
+        }
+    }
+
+    @Override
+    public Optional<TermEntry> approve(int termId) throws SQLException {
+        try (Connection conn = db.open()) {
+            return Optional.ofNullable(TermDao.approve(conn, termId)).map(DefaultTermService::toEntry);
         }
     }
 
@@ -98,6 +107,6 @@ public final class DefaultTermService implements TermService {
     }
 
     private static TermEntry toEntry(TermDao.Entry e) {
-        return new TermEntry(e.termId(), e.korean(), e.english(), e.explanation());
+        return new TermEntry(e.termId(), e.korean(), e.english(), e.explanation(), e.verified());
     }
 }

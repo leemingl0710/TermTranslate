@@ -18,14 +18,25 @@ class TermsPageTest {
     static class FakeTerms implements TermApi {
         final List<TermEntry> rows = new ArrayList<>(List.of(
                 new TermEntry(1, "응력", "stress", "단위 면적당 힘"),
-                new TermEntry(2, "변형률", "strain", null)));
+                new TermEntry(2, "변형률", "strain", null),
+                new TermEntry(3, "직렬화", "serialization", "객체를 바이트로", false)));
         final List<String> calls = new ArrayList<>();
 
         @Override
-        public List<TermEntry> search(String query) {
-            calls.add("search:" + query);
-            return rows.stream().filter(t -> t.korean().contains(query)
-                    || (t.english() != null && t.english().contains(query))).toList();
+        public List<TermEntry> search(String query, boolean unverifiedOnly) {
+            calls.add("search:" + query + (unverifiedOnly ? ":review" : ""));
+            return rows.stream().filter(t -> !unverifiedOnly || t.needsReview())
+                    .filter(t -> t.korean().contains(query)
+                            || (t.english() != null && t.english().contains(query))).toList();
+        }
+
+        @Override
+        public TermEntry approve(int termId) {
+            calls.add("approve:" + termId);
+            TermEntry old = rows.stream().filter(r -> r.termId() == termId).findFirst().orElseThrow();
+            TermEntry t = new TermEntry(termId, old.korean(), old.english(), old.explanation(), true);
+            rows.replaceAll(r -> r.termId() == termId ? t : r);
+            return t;
         }
 
         @Override
@@ -60,12 +71,14 @@ class TermsPageTest {
     @Test
     void refreshFillsTable() {
         page.refresh();
-        assertEquals(2, page.shownRows().size());
+        assertEquals(3, page.shownRows().size());
         assertEquals("응력", page.cell(0, 0));
         assertEquals("stress", page.cell(0, 1));
         assertEquals("단위 면적당 힘", page.cell(0, 2));
+        assertEquals(TermsPage.VERIFIED, page.cell(0, 3));
         assertEquals("", page.cell(1, 2), "설명이 없으면 빈칸");
-        assertEquals("2 term(s)", page.statusText());
+        assertEquals(TermsPage.NEEDS_REVIEW, page.cell(2, 3), "자동으로 들어온 용어");
+        assertEquals("3 term(s) · 1 need review", page.statusText());
     }
 
     @Test
@@ -91,7 +104,7 @@ class TermsPageTest {
         page.setFormDialog((title, initial) -> Optional.of(new TermsPage.TermForm("탄성", "elasticity", "")));
         page.clickAdd();
         assertTrue(api.calls.contains("add:탄성"));
-        assertEquals(3, page.shownRows().size(), "추가 뒤 다시 읽음");
+        assertEquals(4, page.shownRows().size(), "추가 뒤 다시 읽음");
         assertEquals("Added: 탄성", page.statusText());
     }
 
@@ -134,11 +147,42 @@ class TermsPageTest {
         page.selectRow(1);
         page.setConfirmDelete(korean -> false);
         page.clickDelete();
-        assertEquals(2, api.rows.size(), "취소하면 지우지 않음");
+        assertEquals(3, api.rows.size(), "취소하면 지우지 않음");
 
         page.setConfirmDelete(korean -> korean.equals("변형률"));
         page.clickDelete();
         assertTrue(api.calls.contains("delete:2"));
+        assertEquals(2, page.shownRows().size());
+    }
+
+    @Test
+    void reviewOnlyFilter() {
+        page.setReviewOnly(true);
+        page.refresh();
+        assertEquals("search::review", api.calls.get(0));
         assertEquals(1, page.shownRows().size());
+        assertEquals("직렬화", page.cell(0, 0));
+
+        api.rows.removeIf(TermEntry::needsReview);
+        page.refresh();
+        assertEquals("No term is waiting for review.", page.statusText());
+    }
+
+    @Test
+    void approveSelected() {
+        page.refresh();
+        page.clickApprove();
+        assertEquals("Select a term to approve.", page.statusText());
+
+        page.selectRow(0);
+        page.clickApprove();
+        assertEquals("Already verified: 응력", page.statusText());
+        assertTrue(api.calls.stream().noneMatch(c -> c.startsWith("approve:")), "확인된 용어는 보내지 않음");
+
+        page.selectRow(2);
+        page.clickApprove();
+        assertTrue(api.calls.contains("approve:3"));
+        assertEquals("Approved: 직렬화", page.statusText());
+        assertEquals(TermsPage.VERIFIED, page.cell(2, 3), "다시 읽어서 확인됨으로 보임");
     }
 }

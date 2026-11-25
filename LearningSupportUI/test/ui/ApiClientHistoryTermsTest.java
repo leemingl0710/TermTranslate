@@ -72,12 +72,17 @@ class ApiClientHistoryTermsTest {
                     reply(ex, 201, "{\"term_id\":5,\"korean\":\"변형률\",\"english\":\"strain\",\"explanation\":null}");
                 }
             } else {
-                reply(ex, 200, "[{\"term_id\":1,\"korean\":\"응력\",\"english\":\"stress\",\"explanation\":\"단위 면적당 힘\"}]");
+                reply(ex, 200, "[{\"term_id\":1,\"korean\":\"응력\",\"english\":\"stress\",\"explanation\":\"단위 면적당 힘\"},"
+                        + "{\"term_id\":3,\"korean\":\"직렬화\",\"english\":\"serialization\",\"explanation\":null,"
+                        + "\"verified\":false}]");
             }
         });
         server.createContext("/terms/", ex -> {
             record(ex);
-            if ("PUT".equals(ex.getRequestMethod())) {
+            if ("POST".equals(ex.getRequestMethod())) {
+                reply(ex, 200, "{\"term_id\":3,\"korean\":\"직렬화\",\"english\":\"serialization\","
+                        + "\"explanation\":null,\"verified\":true}");
+            } else if ("PUT".equals(ex.getRequestMethod())) {
                 reply(ex, 200, "{\"term_id\":1,\"korean\":\"응력\",\"english\":\"stress!\",\"explanation\":null}");
             } else {
                 reply(ex, 200, "{\"deleted\":true}");
@@ -124,6 +129,8 @@ class ApiClientHistoryTermsTest {
         List<ApiClient.TermEntry> found = client.searchTerms("응력");
         assertEquals("GET /terms?q=응력", requests.get(0));
         assertEquals("stress", found.get(0).english());
+        assertFalse(found.get(0).needsReview(), "verified 가 없으면(예전 서버) 확인됨으로 봄");
+        assertTrue(found.get(1).needsReview(), "verified=false 는 확인 전");
 
         ApiClient.TermEntry added = client.addTerm("변형률", "strain", null);
         assertEquals("POST /terms {\"korean\":\"변형률\",\"english\":\"strain\",\"explanation\":null}", requests.get(1));
@@ -144,5 +151,17 @@ class ApiClientHistoryTermsTest {
         assertEquals(409, e.getStatus());
         assertEquals("DUPLICATE_TERM", e.getError());
         assertEquals("이미 있는 용어입니다: 응력", e.getMessage());
+    }
+
+    @Test
+    void reviewSearchAndApprove() throws Exception {
+        client.searchTerms("", true);
+        assertEquals("GET /terms?unverified=true", requests.get(0));
+        client.searchTerms("직렬", true);
+        assertEquals("GET /terms?q=직렬&unverified=true", requests.get(1));
+
+        ApiClient.TermEntry approved = client.approveTerm(3);
+        assertEquals("POST /terms/3/approve", requests.get(2));
+        assertFalse(approved.needsReview());
     }
 }

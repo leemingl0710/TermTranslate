@@ -48,9 +48,11 @@ import java.util.concurrent.Executors;
  * GET  /results/{id}                 결과 조회          → 200 {...}
  * GET  /results?q=강의               이력 목록 (최근 것부터, q: 파일 이름 검색) → 200 [{"result_id":..,"file_name":..,..}]
  * DELETE /results/{id}               이력 삭제 (문서·업로드 파일 포함) → 200 {"deleted":true}
- * GET  /terms?q=응력                 용어 사전 검색 (q: 한국어·영어, 생략하면 전체) → 200 [{"term_id":..,"korean":..,..}]
+ * GET  /terms?q=응력&unverified=true 용어 사전 검색 (q: 한국어·영어, 생략하면 전체 / unverified=true: 확인 전만)
+ *                                    → 200 [{"term_id":..,"korean":..,"english":..,"explanation":..,"verified":..}]
  * POST /terms                        용어 추가 (본문 {"korean":..,"english":..,"explanation":..}) → 201 {...}
  * PUT  /terms/{id}                   용어 수정 (본문 같음) → 200 {...}
+ * POST /terms/{id}/approve           자동으로 들어간 용어 승인 → 200 {...,"verified":true}
  * DELETE /terms/{id}                 용어 삭제 → 200 {"deleted":true}
  * 실패: {"error": "종류", "message": "사용자에게 보여 줄 문장"}
  * </pre>
@@ -142,7 +144,7 @@ public final class ApiServer {
         server.createContext("/terms", ex -> api.handle(ex, Map.of(
                 "GET", api::searchTerms, "POST", api::addTerm)));
         server.createContext("/terms/", ex -> api.handle(ex, Map.of(
-                "PUT", api::updateTerm, "DELETE", api::deleteTerm)));
+                "PUT", api::updateTerm, "DELETE", api::deleteTerm, "POST", api::approveTerm)));
         // 추출이 오래 걸릴 수 있어 요청을 여러 스레드에서 나눠 처리한다.
         ExecutorService pool = Executors.newFixedThreadPool(4);
         server.setExecutor(pool);
@@ -273,7 +275,8 @@ public final class ApiServer {
 
     private Response searchTerms(HttpExchange ex) throws Exception {
         requireExactPath(ex, "/terms");
-        return new Response(200, terms().search(queryParam(ex, "q").orElse("")));
+        boolean unverifiedOnly = queryParam(ex, "unverified").map("true"::equalsIgnoreCase).orElse(false);
+        return new Response(200, terms().search(queryParam(ex, "q").orElse(""), unverifiedOnly));
     }
 
     private Response addTerm(HttpExchange ex) throws Exception {
@@ -292,6 +295,27 @@ public final class ApiServer {
         }
         return new Response(200, saved.get());
     }
+
+    private Response approveTerm(HttpExchange ex) throws Exception {
+        String path = ex.getRequestURI().getPath();
+        if (!path.endsWith(APPROVE_SUFFIX)) {
+            throw new HttpError(404, "NOT_FOUND", "없는 주소입니다: " + path);
+        }
+        String idText = path.substring("/terms/".length(), path.length() - APPROVE_SUFFIX.length());
+        int id;
+        try {
+            id = Integer.parseInt(idText);
+        } catch (NumberFormatException e) {
+            throw new HttpError(400, "BAD_REQUEST", "용어 번호가 올바르지 않습니다: " + idText);
+        }
+        Optional<TermEntry> approved = terms().approve(id);
+        if (approved.isEmpty()) {
+            throw new HttpError(404, "NOT_FOUND", "용어가 없습니다: " + id);
+        }
+        return new Response(200, approved.get());
+    }
+
+    private static final String APPROVE_SUFFIX = "/approve";
 
     private Response deleteTerm(HttpExchange ex) throws Exception {
         int id = idFromPath(ex, "/terms/", "용어");

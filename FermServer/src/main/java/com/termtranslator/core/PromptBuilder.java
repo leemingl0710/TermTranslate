@@ -24,6 +24,8 @@ public final class PromptBuilder {
             Always reply with a single valid JSON object and nothing else (no markdown, no code fences).""";
 
     private static final int MAX_UNIT_TERMS = 30;
+    /** 묶음 하나에서 받는 새 전공용어 후보 최대 개수 */
+    public static final int MAX_NEW_TERMS = 8;
 
     private PromptBuilder() {}
 
@@ -35,7 +37,7 @@ public final class PromptBuilder {
         return isEnglish(lang) ? "easy English" : "easy " + lang.trim();
     }
 
-    /** 묶음 요청: 쉬운 영어 번역 + 3줄 요약 + 페이지 간 연관 + 개념 설명 + 묶음 요약 */
+    /** 묶음 요청: 쉬운 영어 번역 + 3줄 요약 + 페이지 간 연관 + 개념 설명 + 묶음 요약 + 새 전공용어 후보 */
     public static String bundlePrompt(List<Page> pages, List<TermMatch> terms, String previousSummary, String explainLanguage) {
         String pageNumbers = pages.stream().map(p -> String.valueOf(p.number())).collect(Collectors.joining(", "));
         String lang = langNote(explainLanguage);
@@ -54,6 +56,16 @@ public final class PromptBuilder {
         sb.append("4. \"conceptExplanation\": Explain the main concepts and how they connect, in ").append(lang).append(" (4-8 sentences). ")
           .append("Do not just list definitions; explain why and how the ideas relate to each other.\n");
         sb.append("5. \"bundleSummary\": 3-5 ENGLISH sentences summarizing these pages. It will be used as context for the next pages.\n");
+        sb.append("6. \"newTerms\": Up to ").append(MAX_NEW_TERMS)
+          .append(" technical terms of this academic subject that appear in these pages ")
+          .append("and are NOT in the required terminology list. Each is {\"ko\",\"en\",\"easyExplanation\"}:\n")
+          .append("   - \"ko\": the Korean term copied EXACTLY as it is written in the pages (a noun or short noun phrase).\n")
+          .append("   - \"en\": the standard English term used in textbooks of this subject.\n")
+          .append("   - \"easyExplanation\": ONE short sentence in ").append(lang).append(" explaining the meaning.\n")
+          .append("   Include only words a student must learn as subject vocabulary (e.g. 예외 처리, 직렬화, 응력).\n")
+          .append("   Do NOT include: everyday words (파일, 방법, 예제, 실습, 내용, 프로그램), names of people, schools or products, ")
+          .append("code identifiers (variable, method or class names), numbers, dates, or whole sentences. ")
+          .append("Use [] if there is no such term.\n");
         if (!isEnglish(explainLanguage)) {
             sb.append("When you write in ").append(explainLanguage.trim())
               .append(", put the English glossary term in parentheses after each technical term.\n");
@@ -82,7 +94,8 @@ public final class PromptBuilder {
 
         sb.append("## Output format\n");
         sb.append("{\"pages\":[{\"page\":1,\"translation\":\"...\",\"summary\":[\"...\",\"...\",\"...\"],\"linksToPrevious\":\"...\"}],");
-        sb.append("\"conceptExplanation\":\"...\",\"bundleSummary\":\"...\"}\n");
+        sb.append("\"conceptExplanation\":\"...\",\"bundleSummary\":\"...\",");
+        sb.append("\"newTerms\":[{\"ko\":\"...\",\"en\":\"...\",\"easyExplanation\":\"...\"}]}\n");
         sb.append("Return one object in \"pages\" for every page number: ").append(pageNumbers).append(".\n");
         return sb.toString();
     }

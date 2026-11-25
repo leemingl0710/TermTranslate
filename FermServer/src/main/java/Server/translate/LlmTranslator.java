@@ -42,6 +42,8 @@ import java.util.stream.Collectors;
  *
  * 용어 사전은 DB 의 terms 테이블(팀 공용)과, 있으면 TERM_DICT_PATH 파일을 합쳐 쓴다.
  * 같은 한국어 용어가 둘 다에 있으면 DB 쪽을 쓴다.
+ * 사전에 없는 전공용어는 LLM 이 묶음마다 찾아 주고(newTerms), TermFilter 로 거른 뒤 결과 용어에 붙인다.
+ * 저장할 때 사전에 "확인 전" 으로 들어가고, 사람이 용어 사전 화면에서 승인·수정·삭제한다.
  *
  * <p>설정 (.env 또는 환경 변수, LLM_BASE_URL 말고는 모두 생략 가능)
  * <ul>
@@ -140,10 +142,12 @@ public final class LlmTranslator implements Translator {
                     line -> System.out.println(tag + line));
             PipelineResult result = pipeline.run(model, pages);
             EvalResult eval = Evaluator.evaluate(result, pages, dictionary);
-            System.out.printf(Locale.ROOT, "%s완료: 페이지 %d개, 용어 일치율 %.1f%% (%d/%d), JSON 실패 %d, 누락 페이지 %d%n",
+            List<String> known = dictionary.terms().stream().map(Models.Term::ko).toList();
+            List<AnalysisResultDao.Term> newTerms = TermFilter.pick(result.bundles(), allText, known);
+            System.out.printf(Locale.ROOT, "%s완료: 페이지 %d개, 용어 일치율 %.1f%% (%d/%d), JSON 실패 %d, 누락 페이지 %d, 새 전공용어 %d개%n",
                     tag, pages.size(), eval.termMatchRate() * 100, eval.termHits(), eval.termTotal(),
-                    result.stats().jsonFailed, eval.missingPages());
-            return toTranslation(result, found);
+                    result.stats().jsonFailed, eval.missingPages(), newTerms.size());
+            return toTranslation(result, found, newTerms);
         } catch (IOException e) {
             System.out.println(tag + "LLM 서버를 쓸 수 없어 번역을 건너뜁니다 (용어 목록만 저장): " + e.getMessage());
             return new Translation(null, null, null, null, toTerms(found, null));
@@ -206,6 +210,15 @@ public final class LlmTranslator implements Translator {
     // ---------------- 결과 → 결과 화면 카드 4개 + 용어 ----------------
 
     static Translation toTranslation(PipelineResult result, List<TermMatch> found) {
+        return toTranslation(result, found, List.of());
+    }
+
+    /**
+     * @param newTerms LLM 이 찾고 TermFilter 가 남긴 새 전공용어. 사전 용어 뒤에 붙는다.
+     *                 저장할 때 사전에 없으면 "확인 전" 으로 들어간다 (TermDao.ensureIds).
+     */
+    static Translation toTranslation(PipelineResult result, List<TermMatch> found,
+                                     List<AnalysisResultDao.Term> newTerms) {
         StringBuilder translated = new StringBuilder();
         StringBuilder pageSummaries = new StringBuilder();
         List<String> links = new ArrayList<>();
@@ -260,8 +273,10 @@ public final class LlmTranslator implements Translator {
         block(explanation, "Concept explanation", concepts.toString());
         block(explanation, "How the pages connect", String.join("\n", links));
 
+        List<AnalysisResultDao.Term> terms = new ArrayList<>(toTerms(found, u));
+        terms.addAll(newTerms == null ? List.of() : newTerms);
         return new Translation(anyTranslated ? translated.toString() : null, orNull(explanation), orNull(summary),
-                orNull(exam), toTerms(found, u));
+                orNull(exam), terms);
     }
 
     /** 퀴즈 문제 → 체크리스트 → 정답 순서 (문제를 풀기 전에 정답이 보이지 않게) */
