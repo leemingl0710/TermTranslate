@@ -42,9 +42,18 @@
 | `GET /health` | 서버 확인 | `200 {"status":"ok"}` |
 | `POST /documents?filename=a.pdf` (본문: 파일) | 업로드 · 추출 · 저장 | `201 {"result_id", "document_id", "file_name", "item_count"}` |
 | `GET /results/{id}` | 결과 조회 | `200 {"file_name", "items", "summary", ...}` |
+| `GET /results?q=강의` | 이력 목록 (최근 것부터, `q`: 파일 이름 검색, 생략하면 전체) | `200 [{"result_id", "file_name", "analyzed_at", "item_count", "translated", "term_count"}]` |
+| `DELETE /results/{id}` | 이력 삭제 (문서 · 업로드 파일 · 용어 연결 포함, 용어 사전은 그대로) | `200 {"deleted":true}` |
+| `GET /terms?q=응력` | 용어 사전 검색 (`q`: 한국어 · 영어, 생략하면 전체) | `200 [{"term_id", "korean", "english", "explanation"}]` |
+| `POST /terms` (본문: `{"korean", "english", "explanation"}`) | 용어 추가 | `201 {"term_id", ...}` |
+| `PUT /terms/{id}` (본문 같음) | 용어 수정 | `200 {"term_id", ...}` |
+| `DELETE /terms/{id}` | 용어 삭제 | `200 {"deleted":true}` |
 
 실패하면 `{"error": "종류", "message": "사용자에게 보여 줄 문장"}`
-(400 잘못된 파일 · 404 없음 · 405 잘못된 요청 방식 · 413 너무 큼 · 500 서버 오류)
+(400 잘못된 요청 · 404 없음 · 405 잘못된 요청 방식 · 409 이미 있는 용어 · 413 너무 큼 · 500 서버 오류)
+
+용어 규칙: 한국어는 꼭 있어야 하고 100자 이하, 영어도 100자 이하, 같은 한국어 용어는 하나만.
+여기서 넣은 용어는 다음 분석부터 번역기의 사전으로 쓰인다.
 
 ## 번역 · 요약 (term-translator 연동)
 업로드 처리 3단계(`DefaultAnalysisService`)에서 `Server.translate.LlmTranslator` 가 추출된 글자로
@@ -74,7 +83,9 @@
 - 번역 · 요약 · 개념 · 시험 문제 · 용어: LLM 서버를 `.env` 에 설정하면 동작 (위 "번역 · 요약" 참고).
   실제 LLM(gemma-4-26b)과 팀 DB 로 업로드부터 저장까지 확인함 (3페이지 약 1분, 47페이지 약 10분)
 - 공용 용어 사전(`terms`)이 비어 있으면 용어를 지키도록 하는 번역(사전 기반 번역)은 동작하지 않음 → 용어를 넣거나 `TERM_DICT_PATH` 지정
-- 새 UI(`ui/platform`)는 아직 서버 결과와 연결되지 않음. 서버와 연결된 화면은 `ui.Main` (결과 카드 4개 + View all)
+- 새 UI(`ui/platform`, 실행: `ui.platform.MainFrame`): 업로드(여러 파일 순서대로) · 결과(페이지별 원문 ↔ 번역) ·
+  이력(목록 · 검색 · 보기 · 삭제) · 용어 사전(검색 · 추가 · 수정 · 삭제)이 서버와 연결됨.
+  로그인 · 단원 · 평가 · OCR 확인 화면은 아직 데모. 기존 화면 `ui.Main` 도 그대로 동작
 
 ## 테스트
 ```bash

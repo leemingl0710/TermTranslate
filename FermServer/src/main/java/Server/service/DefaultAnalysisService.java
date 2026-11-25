@@ -24,6 +24,7 @@ import java.sql.SQLException;
 import java.sql.Savepoint;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.UUID;
 
 /**
@@ -139,6 +140,67 @@ public final class DefaultAnalysisService implements AnalysisService {
                     row.translatedText(), row.explanation(), row.summary(), row.examQuestions(),
                     row.terms()));
         }
+    }
+
+    /** 이력 화면에 한 번에 보여 줄 최대 개수. */
+    static final int MAX_HISTORY = 200;
+
+    @Override
+    public List<ResultSummary> listResults(String fileQuery) throws SQLException {
+        try (Connection conn = db.open()) {
+            OptionalInt userId = UserDao.findIdByUsername(conn, uploaderUsername);
+            if (userId.isEmpty()) {
+                return List.of();
+            }
+            return AnalysisResultDao.listByUser(conn, userId.getAsInt(), fileQuery, MAX_HISTORY).stream()
+                    .map(s -> new ResultSummary(s.resultId(), s.documentId(), s.fileName(),
+                            s.analyzedAt() == null ? null : s.analyzedAt().toString(),
+                            s.itemCount(), s.translated(), s.termCount()))
+                    .toList();
+        }
+    }
+
+    @Override
+    public boolean deleteResult(int resultId) throws SQLException {
+        AnalysisResultDao.DocumentRef doc;
+        try (Connection conn = db.open()) {
+            conn.setAutoCommit(false);
+            try {
+                OptionalInt userId = UserDao.findIdByUsername(conn, uploaderUsername);
+                Optional<AnalysisResultDao.DocumentRef> found = userId.isEmpty() ? Optional.empty()
+                        : AnalysisResultDao.findDocument(conn, resultId, userId.getAsInt());
+                if (found.isEmpty()) {
+                    conn.rollback();
+                    return false;
+                }
+                doc = found.get();
+                // 문서를 지우면 분석 결과·용어 연결도 함께 지워진다 (ON DELETE CASCADE)
+                DocumentDao.delete(conn, doc.documentId());
+                conn.commit();
+            } catch (SQLException | RuntimeException e) {
+                conn.rollback();
+                throw e;
+            }
+        }
+        deleteUploadedFile(doc.filePath());
+        return true;
+    }
+
+    /**
+     * DB 에서 지운 뒤 업로드 폴더의 파일과 그 무작위 폴더를 지운다.
+     * 업로드 폴더 밖을 가리키는 경로는 건드리지 않는다. 지우지 못해도 DB 삭제는 그대로 둔다.
+     */
+    private void deleteUploadedFile(String filePath) {
+        if (filePath == null || filePath.isBlank()) {
+            return;
+        }
+        Path file = Path.of(filePath).toAbsolutePath().normalize();
+        Path folder = file.getParent();
+        if (folder == null || !folder.startsWith(uploadDir) || folder.equals(uploadDir)) {
+            return;
+        }
+        deleteQuietly(file);
+        deleteQuietly(folder);   // 비어 있을 때만 지워진다
     }
 
     /** 3단계. 번역기가 없거나 실패하면 빈 결과 (번역 오류로 업로드 전체가 실패하지 않게 한다). */

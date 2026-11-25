@@ -2,7 +2,9 @@ package ui;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -16,7 +18,9 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * FermServer 와 HTTP 로 통신한다. 모든 메서드는 시간이 걸릴 수 있으니
@@ -92,6 +96,27 @@ public final class ApiClient {
             @JsonProperty("terms") List<Term> terms) {
     }
 
+    /** GET /results 한 줄 (이력 화면). analyzedAt 은 DB 시각 그대로 (Neon 은 UTC). */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ResultSummary(
+            @JsonProperty("result_id") int resultId,
+            @JsonProperty("document_id") int documentId,
+            @JsonProperty("file_name") String fileName,
+            @JsonProperty("analyzed_at") String analyzedAt,
+            @JsonProperty("item_count") int itemCount,
+            @JsonProperty("translated") boolean translated,
+            @JsonProperty("term_count") int termCount) {
+    }
+
+    /** 용어 사전 한 줄 (GET/POST/PUT /terms). english·explanation 은 없으면 null. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record TermEntry(
+            @JsonProperty("term_id") int termId,
+            @JsonProperty("korean") String korean,
+            @JsonProperty("english") String english,
+            @JsonProperty("explanation") String explanation) {
+    }
+
     private static final ObjectMapper JSON = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
@@ -149,7 +174,83 @@ public final class ApiClient {
         return send(req, AnalysisResult.class);
     }
 
+    // ---------------- 이력 ----------------
+
+    /** 분석 이력 (최근 것부터). fileQuery: 파일 이름 검색어, 비우면 전체. */
+    public List<ResultSummary> listResults(String fileQuery) throws ApiException {
+        HttpRequest req = HttpRequest.newBuilder(URI.create(baseUrl + "/results" + query(fileQuery)))
+                .timeout(Duration.ofSeconds(30)).GET().build();
+        return send(req, new TypeReference<List<ResultSummary>>() { });
+    }
+
+    /** 분석 결과와 그 문서를 지운다. 없는 결과면 ApiException(404). */
+    public void deleteResult(int resultId) throws ApiException {
+        HttpRequest req = HttpRequest.newBuilder(URI.create(baseUrl + "/results/" + resultId))
+                .timeout(Duration.ofSeconds(30)).DELETE().build();
+        send(req, JsonNode.class);
+    }
+
+    // ---------------- 용어 사전 ----------------
+
+    /** 한국어·영어에 query 가 들어간 용어. 비우면 전체. */
+    public List<TermEntry> searchTerms(String query) throws ApiException {
+        HttpRequest req = HttpRequest.newBuilder(URI.create(baseUrl + "/terms" + query(query)))
+                .timeout(Duration.ofSeconds(30)).GET().build();
+        return send(req, new TypeReference<List<TermEntry>>() { });
+    }
+
+    /** 용어를 추가한다. 같은 한국어 용어가 있으면 ApiException(409, DUPLICATE_TERM). */
+    public TermEntry addTerm(String korean, String english, String explanation) throws ApiException {
+        return send(jsonRequest("POST", "/terms", korean, english, explanation), TermEntry.class);
+    }
+
+    /** 용어를 고친다. */
+    public TermEntry updateTerm(int termId, String korean, String english, String explanation) throws ApiException {
+        return send(jsonRequest("PUT", "/terms/" + termId, korean, english, explanation), TermEntry.class);
+    }
+
+    /** 용어를 지운다. 분석 결과와의 연결도 함께 지워진다. */
+    public void deleteTerm(int termId) throws ApiException {
+        HttpRequest req = HttpRequest.newBuilder(URI.create(baseUrl + "/terms/" + termId))
+                .timeout(Duration.ofSeconds(30)).DELETE().build();
+        send(req, JsonNode.class);
+    }
+
+    private HttpRequest jsonRequest(String method, String path, String korean, String english, String explanation)
+            throws ApiException {
+        Map<String, String> body = new LinkedHashMap<>();
+        body.put("korean", korean);
+        body.put("english", english);
+        body.put("explanation", explanation);
+        try {
+            return HttpRequest.newBuilder(URI.create(baseUrl + path))
+                    .timeout(Duration.ofSeconds(30))
+                    .header("Content-Type", "application/json; charset=utf-8")
+                    .method(method, HttpRequest.BodyPublishers.ofString(JSON.writeValueAsString(body),
+                            StandardCharsets.UTF_8))
+                    .build();
+        } catch (IOException e) {
+            throw new ApiException(0, "BAD_REQUEST", "요청을 만들 수 없습니다: " + e.getMessage());
+        }
+    }
+
+    /** "?q=..." (비어 있으면 ""). 한글·공백도 안전하게. */
+    private static String query(String q) {
+        if (q == null || q.isBlank()) {
+            return "";
+        }
+        return "?q=" + URLEncoder.encode(q.strip(), StandardCharsets.UTF_8).replace("+", "%20");
+    }
+
+    private <T> T send(HttpRequest req, TypeReference<T> type) throws ApiException {
+        return send(req, JSON.getTypeFactory().constructType(type));
+    }
+
     private <T> T send(HttpRequest req, Class<T> type) throws ApiException {
+        return send(req, JSON.getTypeFactory().constructType(type));
+    }
+
+    private <T> T send(HttpRequest req, JavaType type) throws ApiException {
         HttpResponse<String> res;
         try {
             res = http.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));

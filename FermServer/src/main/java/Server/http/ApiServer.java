@@ -8,7 +8,11 @@ import Server.extract.JavaExtractor;
 import Server.extract.TextExtractor;
 import Server.service.AnalysisService;
 import Server.service.DefaultAnalysisService;
+import Server.service.DefaultTermService;
 import Server.service.ResultDetail;
+import Server.service.TermEntry;
+import Server.service.TermException;
+import Server.service.TermService;
 import Server.service.UploadResult;
 import Server.translate.LlmTranslator;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -42,6 +46,12 @@ import java.util.concurrent.Executors;
  * GET  /health                       서버 확인          → 200 {"status":"ok"}
  * POST /documents?filename=a.pdf     업로드·분석 (pdf, pptx, ppt) (본문=파일) → 201 {"result_id":..,"document_id":..,"file_name":..,"item_count":..}
  * GET  /results/{id}                 결과 조회          → 200 {...}
+ * GET  /results?q=강의               이력 목록 (최근 것부터, q: 파일 이름 검색) → 200 [{"result_id":..,"file_name":..,..}]
+ * DELETE /results/{id}               이력 삭제 (문서·업로드 파일 포함) → 200 {"deleted":true}
+ * GET  /terms?q=응력                 용어 사전 검색 (q: 한국어·영어, 생략하면 전체) → 200 [{"term_id":..,"korean":..,..}]
+ * POST /terms                        용어 추가 (본문 {"korean":..,"english":..,"explanation":..}) → 201 {...}
+ * PUT  /terms/{id}                   용어 수정 (본문 같음) → 200 {...}
+ * DELETE /terms/{id}                 용어 삭제 → 200 {"deleted":true}
  * 실패: {"error": "종류", "message": "사용자에게 보여 줄 문장"}
  * </pre>
  *
@@ -62,12 +72,17 @@ public final class ApiServer {
             "InputNotFoundError", "UnsupportedFormatError", "CorruptedFileError",
             "EncryptedFileError", "ConversionError");
 
+    /** POST/PUT /terms 본문의 최대 크기. 용어 하나라 작다. */
+    private static final int MAX_JSON_BYTES = 64 * 1024;
+
     private final AnalysisService service;
+    private final TermService terms;
     private final long maxUploadBytes;
     private final Path tempDir;
 
-    private ApiServer(AnalysisService service, long maxUploadBytes, Path tempDir) {
+    private ApiServer(AnalysisService service, TermService terms, long maxUploadBytes, Path tempDir) {
         this.service = service;
+        this.terms = terms;
         this.maxUploadBytes = maxUploadBytes;
         this.tempDir = tempDir;
     }
@@ -94,7 +109,8 @@ public final class ApiServer {
         });
         AnalysisService service = new DefaultAnalysisService(
                 extractor, DBConnection::getConnection, uploadDir, uploader, translator);
-        HttpServer server = start(port, service, maxMb * 1024 * 1024, uploadDir.resolve("tmp"));
+        TermService terms = new DefaultTermService(DBConnection::getConnection);
+        HttpServer server = start(port, service, terms, maxMb * 1024 * 1024, uploadDir.resolve("tmp"));
 
         System.out.println("서버 시작: http://localhost:" + server.getAddress().getPort());
         System.out.println("  업로드 폴더: " + uploadDir.toAbsolutePath().normalize());
@@ -105,15 +121,28 @@ public final class ApiServer {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> server.stop(1)));
     }
 
-    /** 서버를 시작한다. port 가 0 이면 빈 포트를 고른다 (테스트용). */
+    /** 용어 사전 없이 시작한다 (/terms 는 503). port 가 0 이면 빈 포트를 고른다 (테스트용). */
     public static HttpServer start(int port, AnalysisService service, long maxUploadBytes, Path tempDir)
             throws IOException {
+        return start(port, service, null, maxUploadBytes, tempDir);
+    }
+
+    /** 서버를 시작한다. port 가 0 이면 빈 포트를 고른다 (테스트용). terms 가 null 이면 /terms 는 503. */
+    public static HttpServer start(int port, AnalysisService service, TermService terms,
+                                   long maxUploadBytes, Path tempDir) throws IOException {
         Files.createDirectories(tempDir);
-        ApiServer api = new ApiServer(service, maxUploadBytes, tempDir);
+        ApiServer api = new ApiServer(service, terms, maxUploadBytes, tempDir);
         HttpServer server = HttpServer.create(new InetSocketAddress("localhost", port), 0);
         server.createContext("/health", ex -> api.handle(ex, "GET", api::health));
         server.createContext("/documents", ex -> api.handle(ex, "POST", api::upload));
-        server.createContext("/results/", ex -> api.handle(ex, "GET", api::result));
+        // "/results" 는 목록, "/results/{id}" 는 한 건 (자바 HttpServer 는 가장 긴 경로가 맞는 쪽으로 보낸다)
+        server.createContext("/results", ex -> api.handle(ex, Map.of("GET", api::listResults)));
+        server.createContext("/results/", ex -> api.handle(ex, Map.of(
+                "GET", api::result, "DELETE", api::deleteResult)));
+        server.createContext("/terms", ex -> api.handle(ex, Map.of(
+                "GET", api::searchTerms, "POST", api::addTerm)));
+        server.createContext("/terms/", ex -> api.handle(ex, Map.of(
+                "PUT", api::updateTerm, "DELETE", api::deleteTerm)));
         // 추출이 오래 걸릴 수 있어 요청을 여러 스레드에서 나눠 처리한다.
         ExecutorService pool = Executors.newFixedThreadPool(4);
         server.setExecutor(pool);
@@ -144,15 +173,25 @@ public final class ApiServer {
     }
 
     private void handle(HttpExchange ex, String method, Handler handler) throws IOException {
+        handle(ex, Map.of(method, handler));
+    }
+
+    /** 요청 방식(GET, POST …)에 맞는 handler 를 부른다. 없는 방식이면 405. */
+    private void handle(HttpExchange ex, Map<String, Handler> handlers) throws IOException {
         long started = System.currentTimeMillis();
         Response res;
         try {
-            if (!ex.getRequestMethod().equalsIgnoreCase(method)) {
-                throw new HttpError(405, "METHOD_NOT_ALLOWED", method + " 요청만 받습니다.");
+            Handler handler = handlers.get(ex.getRequestMethod().toUpperCase(Locale.ROOT));
+            if (handler == null) {
+                throw new HttpError(405, "METHOD_NOT_ALLOWED",
+                        String.join(", ", new java.util.TreeSet<>(handlers.keySet())) + " 요청만 받습니다.");
             }
             res = handler.handle(ex);
         } catch (HttpError e) {
             res = error(e.status, e.error, e.getMessage());
+        } catch (TermException e) {
+            int status = TermException.DUPLICATE_TERM.equals(e.getErrorType()) ? 409 : 400;
+            res = error(status, e.getErrorType(), e.getMessage());
         } catch (ExtractionException e) {
             int status = CLIENT_ERRORS.contains(e.getErrorType()) ? 400 : 500;
             res = error(status, e.getErrorType(), e.getMessage());
@@ -196,13 +235,7 @@ public final class ApiServer {
     }
 
     private Response result(HttpExchange ex) throws Exception {
-        String idText = ex.getRequestURI().getPath().substring("/results/".length());
-        int id;
-        try {
-            id = Integer.parseInt(idText);
-        } catch (NumberFormatException e) {
-            throw new HttpError(400, "BAD_REQUEST", "결과 번호가 올바르지 않습니다: " + idText);
-        }
+        int id = idFromPath(ex, "/results/", "결과");
         Optional<ResultDetail> detail = service.getResult(id);
         if (detail.isEmpty()) {
             throw new HttpError(404, "NOT_FOUND", "결과가 없습니다: " + id);
@@ -210,7 +243,101 @@ public final class ApiServer {
         return new Response(200, detail.get());
     }
 
+    // ---------------- 이력 (History 화면) ----------------
+
+    private Response listResults(HttpExchange ex) throws Exception {
+        requireExactPath(ex, "/results");
+        return new Response(200, service.listResults(queryParam(ex, "q").orElse("")));
+    }
+
+    private Response deleteResult(HttpExchange ex) throws Exception {
+        int id = idFromPath(ex, "/results/", "결과");
+        if (!service.deleteResult(id)) {
+            throw new HttpError(404, "NOT_FOUND", "결과가 없습니다: " + id);
+        }
+        return new Response(200, Map.of("deleted", true));
+    }
+
+    // ---------------- 용어 사전 ----------------
+
+    /** POST/PUT /terms 본문. english·explanation 은 생략 가능. */
+    record TermInput(String korean, String english, String explanation) {
+    }
+
+    private TermService terms() throws HttpError {
+        if (terms == null) {
+            throw new HttpError(503, "NOT_AVAILABLE", "용어 사전 기능이 꺼져 있습니다.");
+        }
+        return terms;
+    }
+
+    private Response searchTerms(HttpExchange ex) throws Exception {
+        requireExactPath(ex, "/terms");
+        return new Response(200, terms().search(queryParam(ex, "q").orElse("")));
+    }
+
+    private Response addTerm(HttpExchange ex) throws Exception {
+        requireExactPath(ex, "/terms");
+        TermInput in = readTermInput(ex);
+        TermEntry saved = terms().add(in.korean(), in.english(), in.explanation());
+        return new Response(201, saved);
+    }
+
+    private Response updateTerm(HttpExchange ex) throws Exception {
+        int id = idFromPath(ex, "/terms/", "용어");
+        TermInput in = readTermInput(ex);
+        Optional<TermEntry> saved = terms().update(id, in.korean(), in.english(), in.explanation());
+        if (saved.isEmpty()) {
+            throw new HttpError(404, "NOT_FOUND", "용어가 없습니다: " + id);
+        }
+        return new Response(200, saved.get());
+    }
+
+    private Response deleteTerm(HttpExchange ex) throws Exception {
+        int id = idFromPath(ex, "/terms/", "용어");
+        if (!terms().delete(id)) {
+            throw new HttpError(404, "NOT_FOUND", "용어가 없습니다: " + id);
+        }
+        return new Response(200, Map.of("deleted", true));
+    }
+
+    private TermInput readTermInput(HttpExchange ex) throws IOException, HttpError {
+        byte[] body;
+        try (InputStream in = ex.getRequestBody()) {
+            body = in.readNBytes(MAX_JSON_BYTES + 1);
+        }
+        if (body.length > MAX_JSON_BYTES) {
+            throw new HttpError(413, "TOO_LARGE", "요청 내용이 너무 큽니다.");
+        }
+        try {
+            TermInput in = JSON.readValue(body, TermInput.class);
+            if (in == null) {
+                throw new HttpError(400, "BAD_REQUEST", "용어 내용이 비어 있습니다.");
+            }
+            return in;
+        } catch (IOException e) {
+            throw new HttpError(400, "BAD_REQUEST", "요청 형식이 올바르지 않습니다 (JSON).");
+        }
+    }
+
     // ---------------- 도우미 ----------------
+
+    /** "/results/12" 같은 경로에서 번호를 꺼낸다. */
+    private static int idFromPath(HttpExchange ex, String prefix, String what) throws HttpError {
+        String idText = ex.getRequestURI().getPath().substring(prefix.length());
+        try {
+            return Integer.parseInt(idText);
+        } catch (NumberFormatException e) {
+            throw new HttpError(400, "BAD_REQUEST", what + " 번호가 올바르지 않습니다: " + idText);
+        }
+    }
+
+    /** "/results" 처럼 정확히 그 경로일 때만 받는다 ("/resultsX" 같은 경로는 404). */
+    private static void requireExactPath(HttpExchange ex, String path) throws HttpError {
+        if (!ex.getRequestURI().getPath().equals(path)) {
+            throw new HttpError(404, "NOT_FOUND", "없는 주소입니다: " + ex.getRequestURI().getPath());
+        }
+    }
 
     /** 받을 수 있는 확장자. 진짜 형식(파일 내용)은 extractor 가 다시 확인한다. */
     private static final List<String> SUPPORTED_EXTENSIONS = List.of(".pdf", ".pptx", ".ppt");

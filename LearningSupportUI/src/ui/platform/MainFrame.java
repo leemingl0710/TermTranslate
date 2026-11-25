@@ -11,7 +11,7 @@ import java.util.List;
  * 학습지원 플랫폼 새 화면의 창. 왼쪽 메뉴 + 가운데 화면(CardLayout).
  *
  * <p>화면마다 클래스가 따로 있다:
- * LoginPage, HomePage, UploadPage, OcrReviewPage, ResultPage, HistoryPage, EvaluationPage.
+ * LoginPage, HomePage, UploadPage, OcrReviewPage, ResultPage, HistoryPage, TermsPage, EvaluationPage.
  * 색·글꼴·버튼 모양은 Theme 에 모았다.
  *
  * <p>아래 public 메서드들은 백엔드(서버)와 연결할 때 쓰는 자리다.
@@ -20,11 +20,13 @@ public class MainFrame extends JFrame {
 
     private final CardLayout cardLayout = new CardLayout();
     private final JPanel contentPanel = new JPanel(cardLayout);
-    private final JPanel menuPanel = new JPanel(new GridLayout(5, 1, 5, 10));
+    private final JPanel menuPanel = new JPanel(new GridLayout(6, 1, 5, 10));
 
     private final UploadPage uploadPage;
     private final OcrReviewPage ocrPage;
     private final ResultPage resultPage;
+    private final HistoryPage historyPage;
+    private final TermsPage termsPage;
 
     public MainFrame() {
         setTitle("Learning Support Platform");
@@ -43,14 +45,18 @@ public class MainFrame extends JFrame {
         addMenuButton("File Upload", Page.UPLOAD);
         addMenuButton("Analysis Results", Page.RESULT);
         addMenuButton("History", Page.HISTORY);
+        addMenuButton("Term Dictionary", Page.TERMS);
         addMenuButton("Evaluation", Page.EVALUATION);
         add(menuPanel, BorderLayout.WEST);
 
         Navigator navigator = this::showPage;
+        ApiClient api = ApiClient.fromSystem();
         resultPage = new ResultPage();
         // 업로드 화면은 목록 순서대로 서버에 올리고, 성공한 결과를 같은 순서로 결과 화면에 넘긴다
-        uploadPage = new UploadPage(navigator, Uploader.of(ApiClient.fromSystem()),
-                resultPage::showResults);
+        uploadPage = new UploadPage(navigator, Uploader.of(api), resultPage::showResults);
+        // 이력: 서버에 저장된 결과 목록. View 를 누르면 그 결과를 결과 화면에서 본다
+        historyPage = new HistoryPage(navigator, HistoryApi.of(api), resultPage::showResults, Background.SWING);
+        termsPage = new TermsPage(TermApi.of(api), Background.SWING);
         ocrPage = new OcrReviewPage(navigator);
 
         addPage(Page.LOGIN, new LoginPage(() -> {
@@ -61,7 +67,8 @@ public class MainFrame extends JFrame {
         addPage(Page.UPLOAD, uploadPage);
         addPage(Page.OCR, ocrPage);
         addPage(Page.RESULT, resultPage);
-        addPage(Page.HISTORY, new HistoryPage(navigator));
+        addPage(Page.HISTORY, historyPage);
+        addPage(Page.TERMS, termsPage);
         addPage(Page.EVALUATION, new EvaluationPage());
         add(contentPanel, BorderLayout.CENTER);
 
@@ -82,6 +89,12 @@ public class MainFrame extends JFrame {
 
     void showPage(Page page) {
         cardLayout.show(contentPanel, page.name());
+        // 이력·용어 사전은 들어올 때마다 서버에서 새로 읽는다 (다른 화면에서 바뀌었을 수 있음)
+        if (page == Page.HISTORY) {
+            historyPage.refresh();
+        } else if (page == Page.TERMS) {
+            termsPage.refresh();
+        }
     }
 
     // ---------------- 백엔드 연동용 ----------------

@@ -24,4 +24,15 @@ public final class DocumentDao {
             }
         }
     }
+
+    /**
+     * 문서를 지운다. 그 문서의 분석 결과(analysis_results)와 용어 연결(analysis_terms)도
+     * 외래 키 ON DELETE CASCADE 로 함께 지워진다. 용어 사전(terms)은 그대로 둔다.
+     */
+    public static boolean delete(Connection conn, int documentId) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement("DELETE FROM documents WHERE document_id = ?")) {
+            ps.setInt(1, documentId);
+            return ps.executeUpdate() == 1;
+        }
+    }
 }

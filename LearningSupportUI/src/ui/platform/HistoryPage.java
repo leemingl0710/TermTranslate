@@ -1,23 +1,55 @@
 package ui.platform;
 
+import ui.ApiClient.AnalysisResult;
+import ui.ApiClient.ResultSummary;
+
 import javax.swing.*;
 import java.awt.*;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Consumer;
+import java.util.function.Predicate;
 
-/** 학습 이력 화면: 파일 이름 검색, 결과 보기, 이력 삭제. 지금은 예시 파일 목록을 쓴다. */
+/**
+ * 학습 이력 화면: 서버에 저장된 분석 결과 목록 (최근 것부터).
+ * 파일 이름 검색, View(결과 화면에서 보기), Delete(결과·문서 삭제).
+ * 화면에 들어올 때마다 {@link #refresh()} 로 서버에서 다시 읽는다.
+ */
 class HistoryPage extends JPanel {
 
-    // 예시 데이터 (백엔드 연동 전)
-    private static final String[] SAMPLE_FILES = {
-            "Introduction to Data Science.pdf",
-            "Database Lecture 03.pptx",
-            "Computer Advanced Math.pdf"
-    };
+    private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+
+    private final Navigator navigator;
+    private final HistoryApi api;
+    private final Consumer<List<AnalysisResult>> resultHandler;
+    private final Background background;
 
     private final JPanel historyPanel = new JPanel();
     private final JTextField searchField = new JTextField(20);
+    private final JLabel statusLabel = new JLabel(" ");
+    /** 지금 목록에 보이는 이력 (테스트에서 확인용). */
+    private final List<ResultSummary> shown = new ArrayList<>();
+    /** 삭제 확인. 테스트에서는 바꿔 끼운다. */
+    private Predicate<String> confirmDelete = fileName -> JOptionPane.showConfirmDialog(this,
+            "Do you want to delete this history record?\n" + fileName
+                    + "\n(The analysis result and the uploaded file are deleted.)",
+            "Delete History", JOptionPane.YES_NO_OPTION) == JOptionPane.YES_OPTION;
 
-    HistoryPage(Navigator navigator) {
+    /**
+     * @param resultHandler View 를 누르면 그 결과 하나를 결과 화면에 넘긴다
+     */
+    HistoryPage(Navigator navigator, HistoryApi api, Consumer<List<AnalysisResult>> resultHandler,
+                Background background) {
         super(new BorderLayout(20, 20));
+        this.navigator = navigator;
+        this.api = api;
+        this.resultHandler = resultHandler;
+        this.background = background;
         setBackground(Theme.BACKGROUND);
         setBorder(BorderFactory.createEmptyBorder(25, 30, 25, 30));
 
@@ -25,28 +57,29 @@ class HistoryPage extends JPanel {
 
         historyPanel.setLayout(new BoxLayout(historyPanel, BoxLayout.Y_AXIS));
         historyPanel.setBackground(Theme.BACKGROUND);
-        for (String file : SAMPLE_FILES) {
-            historyPanel.add(createItem(file, navigator));
-            historyPanel.add(Box.createVerticalStrut(12));
-        }
-
         JScrollPane scrollPane = new JScrollPane(historyPanel);
         scrollPane.setBorder(null);
         scrollPane.getViewport().setBackground(Theme.BACKGROUND);
         add(scrollPane, BorderLayout.CENTER);
+
+        statusLabel.setFont(Theme.koreanFont(13));
+        statusLabel.setForeground(Theme.MUTED);
+        add(statusLabel, BorderLayout.SOUTH);
     }
 
     private JPanel createHeader() {
         searchField.setFont(Theme.koreanFont(14));
         JButton searchButton = new JButton("Search");
         JButton resetButton = new JButton("Reset");
+        JButton refreshButton = new JButton("Refresh");
 
-        searchButton.addActionListener(e -> filter(searchField.getText()));
-        searchField.addActionListener(e -> filter(searchField.getText()));
+        searchButton.addActionListener(e -> refresh());
+        searchField.addActionListener(e -> refresh());
         resetButton.addActionListener(e -> {
             searchField.setText("");
-            filter("");
+            refresh();
         });
+        refreshButton.addActionListener(e -> refresh());
 
         JPanel searchPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
         searchPanel.setBackground(Theme.BACKGROUND);
@@ -54,6 +87,7 @@ class HistoryPage extends JPanel {
         searchPanel.add(searchField);
         searchPanel.add(searchButton);
         searchPanel.add(resetButton);
+        searchPanel.add(refreshButton);
 
         JPanel headerPanel = new JPanel(new BorderLayout(5, 10));
         headerPanel.setBackground(Theme.BACKGROUND);
@@ -63,21 +97,48 @@ class HistoryPage extends JPanel {
         return headerPanel;
     }
 
-    /** 이력 한 줄: 파일 이름·상태 + View·Delete 버튼. */
-    private JPanel createItem(String file, Navigator navigator) {
-        JPanel item = new HistoryItem(file);
-        item.setLayout(new BorderLayout(10, 10));
+    // ---------------- 서버에서 읽기 ----------------
+
+    /** 지금 검색어로 목록을 서버에서 다시 읽는다. */
+    void refresh() {
+        String query = searchField.getText().strip();
+        showStatus("Loading history...", false);
+        background.run(() -> api.list(query), this::showRows, e -> showStatus(e.getMessage(), true));
+    }
+
+    private void showRows(List<ResultSummary> rows) {
+        shown.clear();
+        shown.addAll(rows);
+        historyPanel.removeAll();
+        for (ResultSummary row : rows) {
+            historyPanel.add(createItem(row));
+            historyPanel.add(Box.createVerticalStrut(12));
+        }
+        historyPanel.revalidate();
+        historyPanel.repaint();
+        if (rows.isEmpty()) {
+            showStatus(searchField.getText().isBlank()
+                    ? "No analysis history yet. Upload a file on the File Upload page."
+                    : "No history matches \"" + searchField.getText().strip() + "\".", false);
+        } else {
+            showStatus(rows.size() + " record(s)", false);
+        }
+    }
+
+    /** 이력 한 줄: 파일 이름, 분석 시각·문단 수·번역 여부, View·Delete 버튼. */
+    private JPanel createItem(ResultSummary row) {
+        JPanel item = new JPanel(new BorderLayout(10, 10));
         item.setMaximumSize(new Dimension(Integer.MAX_VALUE, 85));
         item.setBackground(Theme.CARD);
         item.setBorder(Theme.cardBorder(15, 20));
 
-        JLabel fileName = new JLabel(file);
-        fileName.setFont(Theme.font(Font.BOLD, 15));
-        fileName.setForeground(new Color(35, 33, 90));
+        JLabel fileName = new JLabel(row.fileName());
+        fileName.setFont(Theme.koreanFont(15).deriveFont(Font.BOLD));
+        fileName.setForeground(Theme.TITLE);
 
-        JLabel status = new JLabel("Analysis completed");
+        JLabel status = new JLabel(describe(row));
         status.setFont(Theme.font(Font.PLAIN, 12));
-        status.setForeground(Theme.SUCCESS);
+        status.setForeground(row.translated() ? Theme.SUCCESS : Theme.MUTED);
 
         JPanel infoPanel = new JPanel(new GridLayout(2, 1, 5, 5));
         infoPanel.setBackground(Theme.CARD);
@@ -96,38 +157,89 @@ class HistoryPage extends JPanel {
         item.add(infoPanel, BorderLayout.CENTER);
         item.add(actionPanel, BorderLayout.EAST);
 
-        viewButton.addActionListener(e -> navigator.show(Page.RESULT));
-        deleteButton.addActionListener(e -> {
-            int choice = JOptionPane.showConfirmDialog(this,
-                    "Do you want to delete this history record?\n" + file,
-                    "Delete History", JOptionPane.YES_NO_OPTION);
-            if (choice == JOptionPane.YES_OPTION) {
-                historyPanel.remove(item);
-                historyPanel.revalidate();
-                historyPanel.repaint();
-            }
-        });
+        viewButton.addActionListener(e -> view(row));
+        deleteButton.addActionListener(e -> delete(row));
         return item;
     }
 
-    /** 파일 이름에 keyword 가 들어간 이력만 보인다 (대소문자 무시). 빈 문자열이면 전부. */
-    private void filter(String keyword) {
-        String lower = keyword.trim().toLowerCase();
-        for (Component component : historyPanel.getComponents()) {
-            if (component instanceof HistoryItem item) {
-                item.setVisible(item.fileName.toLowerCase().contains(lower));
-            }
+    /** "Analyzed 2026-11-25 11:57 · 803 paragraphs · Translated · 3 terms" */
+    static String describe(ResultSummary row) {
+        StringBuilder sb = new StringBuilder("Analyzed ").append(localTime(row.analyzedAt()))
+                .append(" · ").append(row.itemCount()).append(" paragraphs · ")
+                .append(row.translated() ? "Translated" : "Not translated");
+        if (row.termCount() > 0) {
+            sb.append(" · ").append(row.termCount()).append(row.termCount() == 1 ? " term" : " terms");
         }
-        historyPanel.revalidate();
-        historyPanel.repaint();
+        return sb.toString();
     }
 
-    /** 이력 한 줄. 검색할 때 파일 이름을 바로 꺼내 쓰려고 이름을 같이 들고 있다. */
-    private static final class HistoryItem extends JPanel {
-        final String fileName;
-
-        HistoryItem(String fileName) {
-            this.fileName = fileName;
+    /**
+     * DB 시각(Neon 은 UTC 로 저장)을 이 PC 시간대로 바꿔 "yyyy-MM-dd HH:mm" 로 보여 준다.
+     * 형식을 모르면 받은 글자 그대로.
+     */
+    static String localTime(String dbTime) {
+        if (dbTime == null || dbTime.isBlank()) {
+            return "-";
         }
+        try {
+            return LocalDateTime.parse(dbTime).atOffset(ZoneOffset.UTC)
+                    .atZoneSameInstant(ZoneId.systemDefault()).format(TIME);
+        } catch (DateTimeParseException e) {
+            return dbTime;
+        }
+    }
+
+    // ---------------- 버튼 동작 ----------------
+
+    private void view(ResultSummary row) {
+        showStatus("Opening " + row.fileName() + "...", false);
+        background.run(() -> api.get(row.resultId()), result -> {
+            showStatus(" ", false);
+            resultHandler.accept(List.of(result));
+            navigator.show(Page.RESULT);
+        }, e -> showStatus(e.getMessage(), true));
+    }
+
+    private void delete(ResultSummary row) {
+        if (!confirmDelete.test(row.fileName())) {
+            return;
+        }
+        showStatus("Deleting " + row.fileName() + "...", false);
+        background.run(() -> {
+            api.delete(row.resultId());
+            return null;
+        }, ignored -> refresh(), e -> showStatus(e.getMessage(), true));
+    }
+
+    private void showStatus(String text, boolean error) {
+        statusLabel.setText(text == null || text.isBlank() ? " " : text);
+        statusLabel.setForeground(error ? Theme.DANGER : Theme.MUTED);
+    }
+
+    // ---------------- 테스트용 ----------------
+
+    List<ResultSummary> shownRows() {
+        return List.copyOf(shown);
+    }
+
+    String statusText() {
+        return statusLabel.getText();
+    }
+
+    void setSearchText(String text) {
+        searchField.setText(text);
+    }
+
+    void setConfirmDelete(Predicate<String> confirm) {
+        this.confirmDelete = confirm;
+    }
+
+    /** index 번째 줄의 View / Delete 버튼을 누른다. */
+    void clickView(int index) {
+        view(shown.get(index));
+    }
+
+    void clickDelete(int index) {
+        delete(shown.get(index));
     }
 }
