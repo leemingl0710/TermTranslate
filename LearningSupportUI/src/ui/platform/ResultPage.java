@@ -149,4 +149,6 @@ class ResultPage extends JPanel {
     private void updatePageLabel() {
         pageLabel.setText("Page " + (currentPage + 1) + " / " + ORIGINAL_PAGES.length);
     }
+
+    void showResults(java.util.List<ui.ApiClient.AnalysisResult> results) { /* 다른 작업에서 구현 */ }
 }
