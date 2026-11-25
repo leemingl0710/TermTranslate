@@ -319,6 +319,4 @@ class ResultPage extends JPanel {
     void clickPrevious() {
         previousButton.doClick();
     }
-
-    void showResults(java.util.List<ui.ApiClient.AnalysisResult> results) { /* 다른 작업에서 구현 */ }
 }
