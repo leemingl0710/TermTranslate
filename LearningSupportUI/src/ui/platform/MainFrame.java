@@ -1,5 +1,7 @@
 package ui.platform;
 
+import ui.ApiClient;
+
 import javax.swing.*;
 import java.awt.*;
 import java.io.File;
@@ -22,6 +24,7 @@ public class MainFrame extends JFrame {
 
     private final UploadPage uploadPage;
     private final OcrReviewPage ocrPage;
+    private final ResultPage resultPage;
 
     public MainFrame() {
         setTitle("Learning Support Platform");
@@ -44,7 +47,10 @@ public class MainFrame extends JFrame {
         add(menuPanel, BorderLayout.WEST);
 
         Navigator navigator = this::showPage;
-        uploadPage = new UploadPage(navigator);
+        resultPage = new ResultPage();
+        // 업로드 화면은 목록 순서대로 서버에 올리고, 성공한 결과를 같은 순서로 결과 화면에 넘긴다
+        uploadPage = new UploadPage(navigator, Uploader.of(ApiClient.fromSystem()),
+                resultPage::showResults);
         ocrPage = new OcrReviewPage(navigator);
 
         addPage(Page.LOGIN, new LoginPage(() -> {
@@ -54,7 +60,7 @@ public class MainFrame extends JFrame {
         addPage(Page.HOME, new HomePage());
         addPage(Page.UPLOAD, uploadPage);
         addPage(Page.OCR, ocrPage);
-        addPage(Page.RESULT, new ResultPage());
+        addPage(Page.RESULT, resultPage);
         addPage(Page.HISTORY, new HistoryPage(navigator));
         addPage(Page.EVALUATION, new EvaluationPage());
         add(contentPanel, BorderLayout.CENTER);
