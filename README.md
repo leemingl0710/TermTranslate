@@ -69,7 +69,8 @@
 
 ## 현재 상태
 - 로그인 없음: 모든 업로드는 `admin` 사용자로 저장 (`Server.tools.CreateUser` 로 사용자 생성)
-- PDF만 지원 (PPT는 추후)
+- 지원 형식: PDF, PPTX, PPT (PPT·PPTX 는 LibreOffice 로 PDF 로 바꿔서 처리, `extractor/README.md` 참고).
+  자바 추출기(`EXTRACTOR_ENGINE=java`)는 PDF, PPTX 만
 - 번역 · 요약 · 개념 · 시험 문제 · 용어: LLM 서버를 `.env` 에 설정하면 동작 (위 "번역 · 요약" 참고).
   실제 LLM(gemma-4-26b)과 팀 DB 로 업로드부터 저장까지 확인함 (3페이지 약 1분, 47페이지 약 10분)
 - 공용 용어 사전(`terms`)이 비어 있으면 용어를 지키도록 하는 번역(사전 기반 번역)은 동작하지 않음 → 용어를 넣거나 `TERM_DICT_PATH` 지정
