@@ -131,4 +131,23 @@ class ResultPageTest {
             assertEquals("Page 2 / 2  (p.3)", page.pageLabelText());
         });
     }
+
+    @Test
+    void quizAndChecklistFollowSelectedFile() throws Exception {
+        onEdt(() -> {
+            ResultPage page = new ResultPage();
+            assertEquals(QuizPanel.NO_QUIZ, page.quizPanel().messageText());
+            assertEquals(ChecklistPanel.NO_CHECKLIST, page.checklistPanel().countText());
+
+            ApiClient.AnalysisResult withExam = new ApiClient.AnalysisResult(9, "c.pdf", null,
+                    List.of(PagedResultTest.item(1, "x")), null, null, null, ExamContentTest.SAMPLE, null);
+            page.showResults(List.of(withExam, secondFile()));
+            assertEquals("Question 1 of 2", page.quizPanel().counterText());
+            assertEquals("Self-check (0 / 3 done)", page.checklistPanel().countText());
+
+            page.fileSelector().setSelectedIndex(1);
+            assertTrue(page.quizPanel().showingMessage(), "퀴즈 없는 파일");
+            assertEquals(ChecklistPanel.NO_CHECKLIST, page.checklistPanel().countText());
+        });
+    }
 }

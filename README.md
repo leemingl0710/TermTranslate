@@ -67,6 +67,11 @@
 | Key Concepts (`explanation`) | 핵심 개념, 개념 설명, 페이지 사이의 연결 |
 | Exam Preparation (`exam_questions`) | 복습 퀴즈 → 시험 대비 체크리스트 → 정답 |
 
+새 화면(`ui.platform.ResultPage`)은 `exam_questions` 글을 `ExamContent` 로 나눠 아래 탭 두 개로 보여 준다.
+- **Quiz**: 한 문제씩 풀고 Check 를 눌러야 맞음/틀림과 해설이 보인다. 다 풀면 점수와 Try again.
+- **Checklist**: 자료에 맞게 만든 자기 점검 항목 (체크 개수 표시, 저장하지 않음).
+- 글 모양이 달라 나누지 못하면 Quiz 탭에 원래 글을 그대로 보여 준다.
+
 - **켜는 법**: `FermServer/.env` 에 `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` 을 채운다 (`.env.example` 의 "번역·요약" 부분 참고).
   비워 두면 지금까지처럼 추출 결과만 저장하고 카드는 "Not available yet." 으로 나온다.
 - **용어 사전**: DB 의 `terms` 테이블을 사전으로 쓴다. `TERM_DICT_PATH` 에 CSV/TSV 파일(`ko,en,description`)을 주면 함께 쓰고,

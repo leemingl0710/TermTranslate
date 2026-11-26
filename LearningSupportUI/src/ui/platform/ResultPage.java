@@ -8,9 +8,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 분석 결과 화면: 페이지별 원문 ↔ 번역 비교, 아래 탭(설명·요약·용어·체크리스트).
+ * 분석 결과 화면: 페이지별 원문 ↔ 번역 비교, 아래 탭(설명·요약·용어·퀴즈·체크리스트).
  * 서버 결과는 {@link #showResults(List)} (여러 파일) 또는 {@link #showResult(ApiClient.AnalysisResult)} 로 넣는다.
- * 글 해석은 {@link PagedResult} 가 맡는다.
+ * 글 해석은 {@link PagedResult}, 퀴즈·체크리스트 글은 {@link ExamContent} 가 맡는다.
  */
 class ResultPage extends JPanel {
 
@@ -28,6 +28,8 @@ class ResultPage extends JPanel {
     private final JTextArea explanationArea = Theme.readOnlyText(EMPTY_TEXT);
     private final JTextArea summaryArea = Theme.readOnlyText(EMPTY_TEXT);
     private final JTextArea termsArea = Theme.readOnlyText(EMPTY_TEXT);
+    private final QuizPanel quizPanel = new QuizPanel();
+    private final ChecklistPanel checklistPanel = new ChecklistPanel();
 
     /** 파일 선택 순서 그대로의 결과 목록. */
     private final List<ApiClient.AnalysisResult> results = new ArrayList<>();
@@ -178,19 +180,13 @@ class ResultPage extends JPanel {
         summaryArea.setFont(Theme.koreanFont(13));
         termsArea.setFont(Theme.koreanFont(13));
 
-        JPanel checklistPanel = new JPanel();
-        checklistPanel.setLayout(new BoxLayout(checklistPanel, BoxLayout.Y_AXIS));
-        checklistPanel.setBackground(Theme.CARD);
-        checklistPanel.add(new JCheckBox("I understand the main concept."));
-        checklistPanel.add(new JCheckBox("I reviewed the important terms."));
-        checklistPanel.add(new JCheckBox("I checked the original lecture text."));
-
         JTabbedPane learningTabs = new JTabbedPane();
         learningTabs.addTab("Page Explanation", new JScrollPane(explanationArea));
         learningTabs.addTab("Chapter Summary", new JScrollPane(summaryArea));
         learningTabs.addTab("Key Terms", new JScrollPane(termsArea));
+        learningTabs.addTab("Quiz", quizPanel);
         learningTabs.addTab("Checklist", checklistPanel);
-        learningTabs.setPreferredSize(new Dimension(700, 160));
+        learningTabs.setPreferredSize(new Dimension(700, 230));
         return learningTabs;
     }
 
@@ -206,6 +202,8 @@ class ResultPage extends JPanel {
         explanationArea.setText(EMPTY_TEXT);
         summaryArea.setText(EMPTY_TEXT);
         termsArea.setText(EMPTY_TEXT);
+        quizPanel.show(ExamContent.EMPTY);
+        checklistPanel.show(List.of());
         updatePager();
     }
 
@@ -215,6 +213,9 @@ class ResultPage extends JPanel {
         subtitleLabel.setText(displayName(result) + "  ·  " + current.pageCount() + " pages");
         summaryArea.setText(chapterSummary(current));
         termsArea.setText(orNotAvailable(current.termsText()));
+        ExamContent exam = ExamContent.parse(result == null ? null : result.examQuestions());
+        quizPanel.show(exam);
+        checklistPanel.show(exam.checklist());
         currentPage = 0;
         if (current.pageCount() == 0) {
             originalText.setText("No text was extracted from this file.");
@@ -306,6 +307,14 @@ class ResultPage extends JPanel {
 
     String termsTextValue() {
         return termsArea.getText();
+    }
+
+    QuizPanel quizPanel() {
+        return quizPanel;
+    }
+
+    ChecklistPanel checklistPanel() {
+        return checklistPanel;
     }
 
     JComboBox<String> fileSelector() {
