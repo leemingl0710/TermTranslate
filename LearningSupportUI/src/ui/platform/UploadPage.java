@@ -19,7 +19,7 @@ import java.util.function.Consumer;
 class UploadPage extends JPanel {
 
     /** 서버(ApiServer.isSupported)가 받는 형식만. */
-    private static final String[] SUPPORTED_EXTENSIONS = {"pdf", "ppt", "pptx"};
+    private static final String[] SUPPORTED_EXTENSIONS = {"pdf", "ppt", "pptx", "png", "jpg", "jpeg"};
 
     private static final String WAITING = "대기";
     private static final String ANALYZING = "분석 중";
@@ -82,7 +82,7 @@ class UploadPage extends JPanel {
         JPanel headerPanel = new JPanel(new BorderLayout(5, 10));
         headerPanel.setBackground(Theme.BACKGROUND);
         headerPanel.add(Theme.header("Upload Learning Materials", 26,
-                "Select your lecture materials (PDF, PPT, PPTX). They are analyzed in list order.", 14),
+                "Select your lecture materials (PDF, PPT, PPTX, or photos: PNG, JPG). They are analyzed in list order.", 14),
                 BorderLayout.NORTH);
         headerPanel.add(chapterPanel, BorderLayout.SOUTH);
         return headerPanel;
@@ -179,7 +179,7 @@ class UploadPage extends JPanel {
         chooser.setMultiSelectionEnabled(true);
         chooser.setAcceptAllFileFilterUsed(false);
         chooser.setFileFilter(new FileNameExtensionFilter(
-                "Supported Files (PDF, PPT, PPTX)", SUPPORTED_EXTENSIONS));
+                "Supported Files (PDF, PPT, PPTX, PNG, JPG)", SUPPORTED_EXTENSIONS));
 
         if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
             return;
@@ -188,7 +188,7 @@ class UploadPage extends JPanel {
             String name = file.getName();
             if (!isSupported(name)) {
                 JOptionPane.showMessageDialog(this,
-                        "Unsupported file format: " + name + "\nPlease select PDF, PPT or PPTX.",
+                        "Unsupported file format: " + name + "\nPlease select PDF, PPT, PPTX, PNG or JPG.",
                         "File Format Error", JOptionPane.ERROR_MESSAGE);
             } else if (!containsFileName(name)) {
                 selectedFiles.add(file);

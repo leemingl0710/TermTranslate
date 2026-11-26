@@ -9,7 +9,7 @@ import java.util.List;
  * 필드는 extractor/extractor/models.py 의 Item 과 1:1 로 대응한다.
  *
  * @param sourceFile   원본 파일 이름 (예: lecture.pdf)
- * @param sourceFormat 원본 형식 (pdf, pptx, ppt)
+ * @param sourceFormat 원본 형식 (pdf, pptx, ppt, png, jpg)
  * @param page         페이지(슬라이드) 번호, 1부터
  * @param origin       추출 출처: 텍스트 레이어(TEXT) 또는 이미지 글자 인식(OCR)
  * @param content      추출된 문단

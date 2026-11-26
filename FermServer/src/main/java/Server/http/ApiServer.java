@@ -44,7 +44,7 @@ import java.util.concurrent.Executors;
  *
  * <pre>
  * GET  /health                       서버 확인          → 200 {"status":"ok"}
- * POST /documents?filename=a.pdf     업로드·분석 (pdf, pptx, ppt) (본문=파일) → 201 {"result_id":..,"document_id":..,"file_name":..,"item_count":..}
+ * POST /documents?filename=a.pdf     업로드·분석 (pdf, pptx, ppt, png, jpg) (본문=파일) → 201 {"result_id":..,"document_id":..,"file_name":..,"item_count":..}
  * GET  /results/{id}                 결과 조회          → 200 {...}
  * GET  /results?q=강의               이력 목록 (최근 것부터, q: 파일 이름 검색) → 200 [{"result_id":..,"file_name":..,..}]
  * DELETE /results/{id}               이력 삭제 (문서·업로드 파일 포함) → 200 {"deleted":true}
@@ -216,7 +216,7 @@ public final class ApiServer {
                 .filter(s -> !s.isEmpty())
                 .orElseThrow(() -> new HttpError(400, "BAD_REQUEST", "filename 값이 필요합니다."));
         if (!isSupported(fileName)) {
-            throw new HttpError(400, "UnsupportedFormatError", "PDF·PPT 파일만 지원합니다: " + fileName);
+            throw new HttpError(400, "UnsupportedFormatError", "PDF·PPT·이미지(PNG, JPG) 파일만 지원합니다: " + fileName);
         }
         String declared = ex.getRequestHeaders().getFirst("Content-Length");
         if (declared != null && Long.parseLong(declared) > maxUploadBytes) {
@@ -364,7 +364,7 @@ public final class ApiServer {
     }
 
     /** 받을 수 있는 확장자. 진짜 형식(파일 내용)은 extractor 가 다시 확인한다. */
-    private static final List<String> SUPPORTED_EXTENSIONS = List.of(".pdf", ".pptx", ".ppt");
+    private static final List<String> SUPPORTED_EXTENSIONS = List.of(".pdf", ".pptx", ".ppt", ".png", ".jpg", ".jpeg");
 
     static boolean isSupported(String fileName) {
         String lower = fileName.toLowerCase(Locale.ROOT);

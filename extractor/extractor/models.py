@@ -15,7 +15,7 @@ class PageType(str, Enum):
 @dataclass
 class Item:
     source_file: str
-    source_format: str             # pdf, pptx, ppt
+    source_format: str             # pdf, pptx, ppt, png, jpg
     page: int                      # 1부터 시작 (슬라이드 번호와 동일)
     origin: Literal["text", "ocr"]
     content: str

@@ -201,7 +201,9 @@ class BatchUploaderTest {
         assertTrue(UploadPage.isSupported("slides.pptx"));
         assertTrue(UploadPage.isSupported("old.ppt"));
         assertFalse(UploadPage.isSupported("notes.txt"));
-        assertFalse(UploadPage.isSupported("photo.png"));
-        assertFalse(UploadPage.isSupported("photo.jpg"));
+        assertTrue(UploadPage.isSupported("photo.png"), "사진도 올릴 수 있음");
+        assertTrue(UploadPage.isSupported("photo.JPG"));
+        assertTrue(UploadPage.isSupported("photo.jpeg"));
+        assertFalse(UploadPage.isSupported("photo.gif"));
     }
 }

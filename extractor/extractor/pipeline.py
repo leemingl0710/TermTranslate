@@ -100,7 +100,7 @@ def extract(path: str | Path, th: Thresholds = DEFAULT) -> list[Item]:
     page_heights: dict[int, float] = {}
     cache = _ImageOcrCache()
 
-    with as_pdf(path, th.convert_timeout_sec) as (pdf_path, fmt):
+    with as_pdf(path, th.convert_timeout_sec, th.render_dpi) as (pdf_path, fmt):
 
         def item(page_no, origin, content, bbox, confidence=None, flags=()):
             return Item(source_file=path.name, source_format=fmt, page=page_no,

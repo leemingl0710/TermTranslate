@@ -224,6 +224,10 @@ class ApiServerTest {
         assertTrue(ApiServer.isSupported("강의.pdf"));
         assertTrue(ApiServer.isSupported("강의.PPTX"));
         assertTrue(ApiServer.isSupported("old.ppt"));
+        assertTrue(ApiServer.isSupported("칠판.JPG"));
+        assertTrue(ApiServer.isSupported("phone.jpeg"));
+        assertTrue(ApiServer.isSupported("capture.png"));
+        assertFalse(ApiServer.isSupported("scan.gif"));
         assertFalse(ApiServer.isSupported("notes.txt"));
         assertFalse(ApiServer.isSupported("report.docx"));
         assertFalse(ApiServer.isSupported("pdf"));

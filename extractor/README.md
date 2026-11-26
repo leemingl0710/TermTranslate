@@ -1,6 +1,6 @@
-# extractor — PDF·PPT 텍스트 추출
+# extractor — PDF·PPT·사진 텍스트 추출
 
-PDF/PPT에서 텍스트 레이어 문장 + 이미지 속 글자(OCR)를 뽑아 번역 단계용 JSON으로 넘긴다.
+PDF/PPT/사진(PNG, JPG)에서 텍스트 레이어 문장 + 이미지 속 글자(OCR)를 뽑아 번역 단계용 JSON으로 넘긴다.
 설계: `PDF·PPT 텍스트 추출 구현 계획` 문서 참고.
 
 ## 설치 (팀원 누구나, 처음 한 번)
@@ -64,7 +64,7 @@ try {
 ## 구조 (단계별 모듈)
 | 파일 | 단계 |
 |---|---|
-| `stage0_input.py` | 0 형식 판별 → PDF 변환 (LibreOffice) |
+| `stage0_input.py` | 0 형식 판별 → PDF 변환 (PPT: LibreOffice, 사진: Pillow + PyMuPDF) |
 | `stage1_classify.py` | 1 페이지 유형 판별 |
 | `stage2_text.py` | 2 텍스트 레이어 추출 |
 | `stage3_select.py` | 3 OCR 대상 선정 + 사전 중복 검사 |
@@ -137,8 +137,15 @@ try {
 - 글머리 기호(`• ⚫ ▪ -` 등)는 줄 맨 앞만 지운다. 번호(`1.` `①`)와 음수(`-1`)는 남긴다.
 - 강의 PDF 5개에서 항목이 약 35~45% 줄었다 (예: 2_파일입출력 199 → 114, OCR 제외 기준).
 
+## 사진(PNG, JPG) 참고
+- 사진 한 장을 한 페이지 PDF 로 바꾼다. 페이지 크기는 300dpi 로 그렸을 때 원본 픽셀 크기가 되게 정해서 OCR 할 때 늘거나 줄지 않는다.
+- 글자 층이 없어서 1단계에서 스캔 페이지로 분류되고 페이지 전체를 OCR 한다. 결과의 `page` 는 1, `source_format` 은 `png`/`jpg`.
+- 휴대폰 사진의 회전 정보(EXIF)를 반영해 바로 세운 뒤 읽는다.
+- 시그니처는 맞는데 내용이 깨진 사진은 `CorruptedFileError`. GIF·BMP 등 다른 그림 형식은 지원하지 않는다.
+- 사진 여러 장은 각각 따로 분석된다 (한 문서로 묶지 않음).
+
 ## PPT 참고
-- 형식은 확장자가 아니라 파일 앞부분(시그니처)으로 판별한다. 지원: `pdf`, `pptx`, `ppt`.
+- 형식은 확장자가 아니라 파일 앞부분(시그니처)으로 판별한다. 지원: `pdf`, `pptx`, `ppt`, `png`, `jpg`(`.jpeg` 포함).
 - PPT/PPTX 는 LibreOffice 로 임시 폴더에 PDF 를 만든 뒤 PDF 와 똑같이 처리한다.
   결과의 `page` 는 슬라이드 번호, `source_format` 은 `pptx`/`ppt`.
 - 변환 최대 시간 120초 (`config.py` 의 `convert_timeout_sec`). 첫 변환은 LibreOffice 가 켜지느라 몇 초 더 걸린다.

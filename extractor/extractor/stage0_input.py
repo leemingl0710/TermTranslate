@@ -3,6 +3,8 @@
 - 파일 앞부분(시그니처)으로 진짜 형식을 확인한다. 확장자만 믿지 않는다.
 - PPT/PPTX 는 LibreOffice 로 PDF 로 바꾼 뒤, 1~5단계를 PDF 와 똑같이 탄다.
   (슬라이드 1장 = PDF 1페이지 → page 번호가 슬라이드 번호와 같다)
+- PNG/JPG 사진은 한 페이지짜리 PDF 로 바꾼다. 글자 층이 없어서 1단계에서 스캔 페이지로
+  분류되고, 4단계에서 페이지 전체를 OCR 한다. (휴대폰 사진의 회전 정보도 반영)
 """
 import os
 import shutil
@@ -13,20 +15,27 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+import pymupdf
+from PIL import Image, ImageOps, UnidentifiedImageError
+
 from .errors import (ConversionError, CorruptedFileError, EncryptedFileError,
                      InputNotFoundError, UnsupportedFormatError)
 
 PDF_MAGIC = b"%PDF"
 ZIP_MAGIC = b"PK\x03\x04"                      # pptx, docx
 OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # ppt, doc, 암호 걸린 pptx
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+JPEG_MAGIC = b"\xff\xd8\xff"
 # 암호 걸린 pptx 는 OLE 파일 안에 이 이름(UTF-16)의 항목이 들어 있다
 _ENCRYPTED_PACKAGE = "EncryptedPackage".encode("utf-16-le")
 
-SUPPORTED = ("pdf", "pptx", "ppt")
+IMAGE_FORMATS = ("png", "jpg")
+SUPPORTED = ("pdf", "pptx", "ppt", "png", "jpg", "jpeg")
+UNSUPPORTED_MESSAGE = "PDF·PPT·이미지(PNG, JPG) 파일만 지원합니다"
 
 
 def detect_format(path: Path) -> str:
-    """'pdf' | 'pptx' | 'ppt' 반환.
+    """'pdf' | 'pptx' | 'ppt' | 'png' | 'jpg' 반환.
 
     - 시그니처가 지원 형식이면 그 형식 (확장자가 틀려도 내용을 믿는다)
     - 확장자는 지원 형식인데 내용이 아니면 → 손상된 파일
@@ -40,6 +49,10 @@ def detect_format(path: Path) -> str:
 
     if data.startswith(PDF_MAGIC):
         return "pdf"
+    if data.startswith(PNG_MAGIC):
+        return "png"
+    if data.startswith(JPEG_MAGIC):
+        return "jpg"
     if data.startswith(ZIP_MAGIC):
         try:
             with zipfile.ZipFile(path) as z:
@@ -52,7 +65,7 @@ def detect_format(path: Path) -> str:
             return "pptx"
         if ext == "pptx":
             raise CorruptedFileError(f"PPTX 파일이 손상되었습니다: {path.name}")
-        raise UnsupportedFormatError(f"PDF·PPT 파일만 지원합니다: {path.name}")
+        raise UnsupportedFormatError(f"{UNSUPPORTED_MESSAGE}: {path.name}")
     if data.startswith(OLE_MAGIC):
         if _ENCRYPTED_PACKAGE in path.read_bytes():
             raise EncryptedFileError(f"암호가 걸린 파일입니다: {path.name}")
@@ -60,11 +73,12 @@ def detect_format(path: Path) -> str:
             return "ppt"
         if ext == "pptx":    # 옛날 형식을 확장자만 바꾼 경우
             return "ppt"
-        raise UnsupportedFormatError(f"PDF·PPT 파일만 지원합니다: {path.name}")
+        raise UnsupportedFormatError(f"{UNSUPPORTED_MESSAGE}: {path.name}")
 
     if ext in SUPPORTED:
-        raise CorruptedFileError(f"{ext.upper()} 파일이 손상되었습니다: {path.name}")
-    raise UnsupportedFormatError(f"PDF·PPT 파일만 지원합니다: {path.name}")
+        name = "JPG" if ext == "jpeg" else ext.upper()
+        raise CorruptedFileError(f"{name} 파일이 손상되었습니다: {path.name}")
+    raise UnsupportedFormatError(f"{UNSUPPORTED_MESSAGE}: {path.name}")
 
 
 def find_soffice() -> str | None:
@@ -121,13 +135,47 @@ def convert_to_pdf(src: Path, fmt: str, workdir: Path, timeout_sec: int) -> Path
     return out
 
 
+def image_to_pdf(src: Path, fmt: str, workdir: Path, render_dpi: int) -> Path:
+    """사진을 한 페이지짜리 PDF 로 바꾼다.
+
+    페이지 크기는 render_dpi 로 그렸을 때 원본 픽셀 크기가 되도록 정한다
+    (4단계가 render_dpi 로 다시 그려 OCR 하므로 사진이 늘거나 줄지 않음).
+    """
+    try:
+        with Image.open(src) as im:
+            im = ImageOps.exif_transpose(im)      # 휴대폰 사진의 회전 정보 반영
+            if im.mode not in ("RGB", "L"):
+                im = im.convert("RGB")
+            out_png = workdir / "input.png"
+            im.save(out_png, "PNG")
+            width, height = im.size
+    except (UnidentifiedImageError, OSError, SyntaxError) as e:
+        raise CorruptedFileError(f"{fmt.upper()} 파일이 손상되었습니다: {src.name}") from e
+    if width < 1 or height < 1:
+        raise CorruptedFileError(f"{fmt.upper()} 파일이 손상되었습니다: {src.name}")
+
+    scale = 72 / render_dpi
+    doc = pymupdf.open()
+    try:
+        page = doc.new_page(width=width * scale, height=height * scale)
+        page.insert_image(page.rect, filename=str(out_png))
+        out = workdir / "input.pdf"
+        doc.save(out)
+    finally:
+        doc.close()
+    return out
+
+
 @contextmanager
-def as_pdf(path: Path, timeout_sec: int) -> Iterator[tuple[Path, str]]:
-    """(PDF 경로, 원래 형식) 을 넘긴다. PDF 면 그대로, PPT/PPTX 면 임시 폴더에 변환하고
-    with 블록이 끝나면 임시 폴더를 지운다."""
+def as_pdf(path: Path, timeout_sec: int, render_dpi: int = 300) -> Iterator[tuple[Path, str]]:
+    """(PDF 경로, 원래 형식) 을 넘긴다. PDF 면 그대로, PPT/PPTX·사진이면 임시 폴더에
+    변환하고 with 블록이 끝나면 임시 폴더를 지운다."""
     fmt = detect_format(path)
     if fmt == "pdf":
         yield path, fmt
         return
     with tempfile.TemporaryDirectory(prefix="extractor-") as tmp:
-        yield convert_to_pdf(path, fmt, Path(tmp), timeout_sec), fmt
+        if fmt in IMAGE_FORMATS:
+            yield image_to_pdf(path, fmt, Path(tmp), render_dpi), fmt
+        else:
+            yield convert_to_pdf(path, fmt, Path(tmp), timeout_sec), fmt

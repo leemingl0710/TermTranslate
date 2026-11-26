@@ -83,8 +83,9 @@
 
 ## 현재 상태
 - 로그인 없음: 모든 업로드는 `admin` 사용자로 저장 (`Server.tools.CreateUser` 로 사용자 생성)
-- 지원 형식: PDF, PPTX, PPT (PPT·PPTX 는 LibreOffice 로 PDF 로 바꿔서 처리, `extractor/README.md` 참고).
-  자바 추출기(`EXTRACTOR_ENGINE=java`)는 PDF, PPTX 만
+- 지원 형식: PDF, PPTX, PPT, 사진(PNG, JPG). PPT·PPTX 는 LibreOffice 로 PDF 로 바꿔서 처리하고,
+  사진은 한 페이지 PDF 로 바꿔 페이지 전체를 OCR 한다 (`extractor/README.md` 참고).
+  자바 추출기(`EXTRACTOR_ENGINE=java`)는 PDF, PPTX 와 사진(Windows OCR)만
 - 번역 · 요약 · 개념 · 시험 문제 · 용어: LLM 서버를 `.env` 에 설정하면 동작 (위 "번역 · 요약" 참고).
   실제 LLM(gemma-4-26b)과 팀 DB 로 업로드부터 저장까지 확인함 (3페이지 약 1분, 47페이지 약 10분)
 - 공용 용어 사전(`terms`)은 분석할 때마다 LLM 이 찾은 전공용어로 채워짐 (확인 전 상태). 자동 인식은 LLM 판단이라 가끔 일반 단어가 섞이니 용어 사전 화면에서 확인 필요
