@@ -15,6 +15,7 @@ import java.util.function.Consumer;
  *
  * <p>Analyze 를 누르면 목록에 보이는 순서 그대로 파일을 하나씩 서버에 올린다(BatchUploader).
  * 목록의 각 줄에 "1. a.pdf — 완료" 처럼 순번과 상태를 보여 준다.
+ * 실패가 있으면 Retry Failed 로 다시 시도할 수 있는 파일만 다시 올린다 (성공한 파일은 다시 분석하지 않음).
  */
 class UploadPage extends JPanel {
 
@@ -43,7 +44,10 @@ class UploadPage extends JPanel {
     private JButton selectButton;
     private JButton removeButton;
     private JButton analyzeButton;
+    private JButton retryButton;
     private boolean running;
+    /** 마지막 분석의 파일별 결과 (selectedFiles 와 같은 순서). 목록을 바꾸면 비운다. */
+    private List<BatchUploader.FileOutcome> lastOutcomes;
 
     /**
      * @param uploader      서버에 올리는 부분
@@ -104,18 +108,23 @@ class UploadPage extends JPanel {
     }
 
     private JPanel createBottom() {
-        Dimension size = new Dimension(160, 42);
-        selectButton = Theme.button("Select Files", 14, size);
-        removeButton = Theme.button("Remove Selected", 14, size);
-        JButton ocrButton = Theme.button("OCR Review", 14, size);
-        analyzeButton = Theme.button("Analyze", 14, size);
+        // 버튼 다섯 개가 한 줄을 똑같이 나눠 쓴다 (창이 좁아도 줄이 넘어가 잘리지 않게)
+        Dimension size = new Dimension(0, 42);
+        selectButton = Theme.button("Select Files", 13, size);
+        removeButton = Theme.button("Remove", 13, size);
+        JButton ocrButton = Theme.button("OCR Review", 13, size);
+        analyzeButton = Theme.button("Analyze", 13, size);
+        retryButton = Theme.button("Retry Failed", 13, size);
+        retryButton.setEnabled(false);
 
-        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 15, 10));
+        JPanel buttonPanel = new JPanel(new GridLayout(1, 5, 10, 0));
+        buttonPanel.setBorder(BorderFactory.createEmptyBorder(10, 0, 10, 0));
         buttonPanel.setBackground(Theme.BACKGROUND);
         buttonPanel.add(selectButton);
         buttonPanel.add(removeButton);
         buttonPanel.add(ocrButton);
         buttonPanel.add(analyzeButton);
+        buttonPanel.add(retryButton);
 
         analysisProgressBar.setValue(0);
         analysisProgressBar.setStringPainted(true);
@@ -128,6 +137,7 @@ class UploadPage extends JPanel {
         selectButton.addActionListener(e -> selectFiles());
         removeButton.addActionListener(e -> removeSelectedFile());
         analyzeButton.addActionListener(e -> analyze());
+        retryButton.addActionListener(e -> retryFailed());
 
         JPanel bottomPanel = new JPanel(new BorderLayout(5, 10));
         bottomPanel.setBackground(Theme.BACKGROUND);
@@ -193,6 +203,7 @@ class UploadPage extends JPanel {
             } else if (!containsFileName(name)) {
                 selectedFiles.add(file);
                 fileStatuses.add(WAITING);
+                forgetOutcomes();   // 목록이 바뀌면 지난 결과의 자리와 맞지 않음
             }
         }
         refreshFileList();
@@ -219,6 +230,7 @@ class UploadPage extends JPanel {
         }
         selectedFiles.remove(index);
         fileStatuses.remove(index);
+        forgetOutcomes();
         refreshFileList(); // 뒤 파일들의 순번을 다시 매긴다
     }
 
@@ -235,9 +247,41 @@ class UploadPage extends JPanel {
             fileStatuses.set(i, WAITING);
         }
         refreshFileList();
+        lastOutcomes = null;
         setRunning(true);
         showProgress(0, "서버 연결 확인 중...");
-        new BatchWorker(files).execute();
+        new BatchWorker(files, null).execute();
+    }
+
+    /** 다시 시도할 수 있는 실패만 다시 올린다. 성공한 파일과 파일 자체가 문제인 실패는 그대로 둔다. */
+    private void retryFailed() {
+        if (running || lastOutcomes == null) {
+            return;
+        }
+        List<BatchUploader.FileOutcome> targets = BatchUploader.retryTargets(lastOutcomes);
+        if (targets.isEmpty()) {
+            return;
+        }
+        for (BatchUploader.FileOutcome o : targets) {
+            setStatus(o.position() - 1, WAITING);
+        }
+        setRunning(true);
+        showProgress(0, "서버 연결 확인 중...");
+        new BatchWorker(null, lastOutcomes).execute();
+    }
+
+    private void forgetOutcomes() {
+        lastOutcomes = null;
+        retryButton.setEnabled(false);
+    }
+
+    /** 목록에 보일 상태: 완료 / 실패: 이유 → 할 일 */
+    static String statusText(BatchUploader.FileOutcome o) {
+        if (o.succeeded()) {
+            return DONE;
+        }
+        String head = o.retryable() ? "실패: " : "실패(다시 올려야 함): ";
+        return head + o.errorMessage() + " → " + FailureAdvice.hint(o.errorCode());
     }
 
     private void setRunning(boolean value) {
@@ -245,6 +289,8 @@ class UploadPage extends JPanel {
         selectButton.setEnabled(!value);
         removeButton.setEnabled(!value);
         analyzeButton.setEnabled(!value);
+        retryButton.setEnabled(!value && lastOutcomes != null
+                && !BatchUploader.retryTargets(lastOutcomes).isEmpty());
         setCursor(value ? Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR) : Cursor.getDefaultCursor());
     }
 
@@ -253,42 +299,53 @@ class UploadPage extends JPanel {
         analysisProgressBar.setString(text);
     }
 
-    /** 목록의 파일들을 순서대로 처리한다. 화면 갱신은 publish → process 로 화면 스레드에서 한다. */
+    /**
+     * 목록의 파일들을 순서대로 처리한다 (files), 또는 지난 결과에서 실패만 다시 처리한다 (previous).
+     * 화면 갱신은 publish → process 로 화면 스레드에서 한다.
+     */
     private final class BatchWorker extends SwingWorker<List<BatchUploader.FileOutcome>, Runnable> {
 
         private final List<File> files;
+        private final List<BatchUploader.FileOutcome> previous;
         private boolean serverDown;
+        /** 이번에 처리한 순서 (진행률용, 작업 스레드에서만 씀) */
+        private int step;
 
-        BatchWorker(List<File> files) {
+        BatchWorker(List<File> files, List<BatchUploader.FileOutcome> previous) {
             this.files = files;
+            this.previous = previous;
         }
 
         @Override
         protected List<BatchUploader.FileOutcome> doInBackground() {
             if (!uploader.isServerUp()) {
                 serverDown = true;
-                return List.of();
+                return previous == null
+                        ? BatchUploader.serverDown(files, SERVER_DOWN_MESSAGE)
+                        : BatchUploader.serverDownOnRetry(previous, SERVER_DOWN_MESSAGE);
             }
-            return new BatchUploader(uploader).run(files, new BatchUploader.Listener() {
+            BatchUploader.Listener listener = new BatchUploader.Listener() {
                 @Override
                 public void onStart(int position, int total, File file) {
+                    int current = ++step;
                     publish(() -> {
                         setStatus(position - 1, ANALYZING);
-                        showProgress((position - 1) * 100 / total,
-                                position + "/" + total + " · " + file.getName() + " 분석 중...");
+                        showProgress((current - 1) * 100 / total,
+                                current + "/" + total + " · " + file.getName() + " 분석 중...");
                     });
                 }
 
                 @Override
                 public void onFinish(BatchUploader.FileOutcome outcome, int total) {
+                    int current = step;
                     publish(() -> {
-                        setStatus(outcome.position() - 1,
-                                outcome.succeeded() ? DONE : "실패: " + outcome.errorMessage());
-                        showProgress(outcome.position() * 100 / total,
-                                outcome.position() + "/" + total + " 처리됨");
+                        setStatus(outcome.position() - 1, statusText(outcome));
+                        showProgress(current * 100 / total, current + "/" + total + " 처리됨");
                     });
                 }
-            });
+            };
+            BatchUploader batch = new BatchUploader(uploader);
+            return previous == null ? batch.run(files, listener) : batch.retry(previous, listener);
         }
 
         @Override
@@ -298,46 +355,66 @@ class UploadPage extends JPanel {
 
         @Override
         protected void done() {
-            setRunning(false);
             List<BatchUploader.FileOutcome> outcomes;
             try {
                 outcomes = get();
             } catch (Exception e) {
+                setRunning(false);
                 Throwable cause = e.getCause() != null ? e.getCause() : e;
                 showProgress(0, "분석 실패");
                 JOptionPane.showMessageDialog(UploadPage.this, String.valueOf(cause.getMessage()),
                         "Analysis failed", JOptionPane.ERROR_MESSAGE);
                 return;
             }
+            int succeededBefore = previous == null ? 0 : BatchUploader.successfulResults(previous).size();
+            lastOutcomes = outcomes;
+            for (BatchUploader.FileOutcome o : outcomes) {
+                setStatus(o.position() - 1, statusText(o));
+            }
+            setRunning(false);   // lastOutcomes 를 보고 Retry Failed 를 켠다
             if (serverDown) {
                 showProgress(0, "서버에 연결할 수 없습니다");
-                JOptionPane.showMessageDialog(UploadPage.this, SERVER_DOWN_MESSAGE,
+                JOptionPane.showMessageDialog(UploadPage.this,
+                        SERVER_DOWN_MESSAGE + "\n서버를 켠 뒤 Retry Failed 를 누르면 이어서 분석합니다.",
                         "Server unavailable", JOptionPane.ERROR_MESSAGE);
                 return;
             }
-            finish(outcomes);
+            finish(outcomes, succeededBefore);
         }
     }
 
-    private void finish(List<BatchUploader.FileOutcome> outcomes) {
+    /** @param succeededBefore 다시 시도 전에 이미 성공해 있던 개수 (처음 분석이면 0) */
+    private void finish(List<BatchUploader.FileOutcome> outcomes, int succeededBefore) {
         List<ApiClient.AnalysisResult> results = BatchUploader.successfulResults(outcomes);
         List<BatchUploader.FileOutcome> failures = BatchUploader.failures(outcomes);
         showProgress(100, "완료: 성공 " + results.size() + " · 실패 " + failures.size());
 
-        StringBuilder summary = new StringBuilder()
-                .append("성공 ").append(results.size()).append("개, 실패 ")
-                .append(failures.size()).append("개");
-        for (BatchUploader.FileOutcome f : failures) {
-            summary.append("\n").append(f.position()).append(". ").append(f.file().getName())
-                    .append(" — ").append(f.errorMessage());
-        }
-        JOptionPane.showMessageDialog(this, summary.toString(), "Analysis finished",
+        JOptionPane.showMessageDialog(this, summaryText(outcomes), "Analysis finished",
                 failures.isEmpty() ? JOptionPane.INFORMATION_MESSAGE : JOptionPane.WARNING_MESSAGE);
 
-        if (!results.isEmpty()) {
+        // 이번에 새로 성공한 것이 있을 때만 결과 화면으로 (지난 성공 결과도 목록 순서대로 함께)
+        if (results.size() > succeededBefore) {
             resultHandler.accept(results);
             navigator.show(Page.RESULT);
         }
+    }
+
+    /** 끝 안내 창의 글: 성공·실패 수, 실패마다 이유와 할 일, 다시 시도 안내 */
+    static String summaryText(List<BatchUploader.FileOutcome> outcomes) {
+        List<BatchUploader.FileOutcome> failures = BatchUploader.failures(outcomes);
+        int retryable = BatchUploader.retryTargets(outcomes).size();
+        StringBuilder summary = new StringBuilder()
+                .append("성공 ").append(BatchUploader.successfulResults(outcomes).size())
+                .append("개, 실패 ").append(failures.size()).append("개");
+        for (BatchUploader.FileOutcome f : failures) {
+            summary.append("\n").append(f.position()).append(". ").append(f.file().getName())
+                    .append(" — ").append(f.errorMessage())
+                    .append("\n    → ").append(FailureAdvice.hint(f.errorCode()));
+        }
+        if (retryable > 0) {
+            summary.append("\n\nRetry Failed 를 누르면 실패한 ").append(retryable).append("개만 다시 분석합니다.");
+        }
+        return summary.toString();
     }
 
     private void createChapter() {
