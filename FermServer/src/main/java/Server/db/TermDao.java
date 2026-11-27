@@ -7,7 +7,11 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /** terms 테이블 (팀 공용 용어 사전). */
 public final class TermDao {
@@ -140,34 +144,66 @@ public final class TermDao {
     }
 
     /**
-     * 용어들의 term_id 를 돌려준다. 사전에 없는 한국어 용어는 "확인 전(verified=false)" 으로 새로 넣고,
-     * 이미 있으면 기존 값(영어·설명·확인 여부)을 그대로 둔다. 길이가 맞지 않는 용어는 건너뛴다.
+     * 용어들의 term_id 를 돌려준다 (자료에 나온 순서, 중복 없이). 사전에 없는 한국어 용어는 "확인 전(verified=false)" 으로
+     * 새로 넣고, 이미 있으면 기존 값(영어·설명·확인 여부)을 그대로 둔다. 길이가 맞지 않는 용어는 건너뛴다.
+     *
+     * <p>DB 에 넣는 순서는 가나다순이다 ({@link #lockOrder}). 두 업로드가 동시에 저장하면서 같은 용어들을
+     * 서로 다른 순서로 넣으면 서로를 기다리다 한쪽이 취소(교착 상태)될 수 있어, 모든 요청이 같은 순서로 넣게 한다.
      */
     public static List<Integer> ensureIds(Connection conn, List<Term> terms) throws SQLException {
         String insert = "INSERT INTO terms (korean_term, english_term, explanation, verified) VALUES (?, ?, ?, false) "
                 + "ON CONFLICT (korean_term) DO NOTHING";
         String select = "SELECT term_id FROM terms WHERE korean_term = ?";
-        List<Integer> ids = new ArrayList<>();
+        Map<String, Integer> idByKorean = new HashMap<>();
         try (PreparedStatement ins = conn.prepareStatement(insert);
              PreparedStatement sel = conn.prepareStatement(select)) {
-            for (Term t : terms) {
-                String ko = t == null || t.korean() == null ? "" : t.korean().strip();
-                String en = t == null || t.english() == null ? "" : t.english().strip();
-                if (ko.isEmpty() || ko.length() > MAX_LENGTH || en.length() > MAX_LENGTH) {
-                    continue;
-                }
+            for (Term t : lockOrder(terms)) {
+                String ko = t.korean().strip();
+                String en = t.english() == null ? "" : t.english().strip();
                 ins.setString(1, ko);
                 ins.setString(2, en.isEmpty() ? null : en);
                 ins.setString(3, t.explanation() == null || t.explanation().isBlank() ? null : t.explanation().strip());
                 ins.executeUpdate();
                 sel.setString(1, ko);
                 try (ResultSet rs = sel.executeQuery()) {
-                    if (rs.next() && !ids.contains(rs.getInt(1))) {
-                        ids.add(rs.getInt(1));
+                    if (rs.next()) {
+                        idByKorean.put(ko, rs.getInt(1));
                     }
                 }
             }
         }
+        // 돌려주는 순서는 자료에 나온 순서 그대로
+        List<Integer> ids = new ArrayList<>();
+        for (Term t : valid(terms)) {
+            Integer id = idByKorean.get(t.korean().strip());
+            if (id != null && !ids.contains(id)) {
+                ids.add(id);
+            }
+        }
         return ids;
+    }
+
+    /** DB 에 넣을 순서: 저장할 수 있는 용어만, 같은 한국어 용어는 처음 것 하나, 한국어 가나다순. */
+    static List<Term> lockOrder(List<Term> terms) {
+        Map<String, Term> first = new LinkedHashMap<>();
+        for (Term t : valid(terms)) {
+            first.putIfAbsent(t.korean().strip(), t);
+        }
+        List<Term> sorted = new ArrayList<>(first.values());
+        sorted.sort(Comparator.comparing(t -> t.korean().strip()));
+        return sorted;
+    }
+
+    /** 한국어가 있고 길이가 맞는 용어만 (원래 순서) */
+    private static List<Term> valid(List<Term> terms) {
+        List<Term> out = new ArrayList<>();
+        for (Term t : terms == null ? List.<Term>of() : terms) {
+            String ko = t == null || t.korean() == null ? "" : t.korean().strip();
+            String en = t == null || t.english() == null ? "" : t.english().strip();
+            if (!ko.isEmpty() && ko.length() <= MAX_LENGTH && en.length() <= MAX_LENGTH) {
+                out.add(t);
+            }
+        }
+        return out;
     }
 }
